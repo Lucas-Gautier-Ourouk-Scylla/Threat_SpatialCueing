@@ -1,0 +1,854 @@
+---
+title: "Survey_Analysis_Categorization"
+author: "Ourouk Scylla Lucas Gautier"
+date: '2024-06-12'
+output:
+  html_document:
+    code_folding: hide
+    mathjax: default
+    theme: united
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+# Aim 
+
+This script is an analysis script for the project "Threat_Spatial Cueing" that study the impact of a threat on attention processes. It use a spatial cueing paradigm and want to replicate the results of Normand et al., (2014) of a reinforcement of the contingent attentional capture using the Threat of Screams paradigm instead of a self-evaluative threat.
+
+This script analyse The survey part of the project 
+- effectiveness of experimental manipulation to induce anxiety, 
+- Screams judged as more threatening than vocalizations
+- Effect of PTSD level on anxiety manipulation
+- ...
+
+The OSf link of this project is available at: https://osf.io/jkt9m/
+Preregistration is available at : https://osf.io/nhxub
+
+
+# Preregistration deviations
+
+Contrary to our preregistration, we run our analysis not on the factorial score of anxiety but preferred the Mean composite score. Indeed, these scores are easier to interpret and understand.
+
+
+# Option settings and data loading
+
+## Knit options
+
+```{r setup}
+
+knitr::opts_chunk$set(message = FALSE, 
+                      warning = FALSE)
+
+knitr::knit_hooks$set(
+   error = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
+           '</div>', sep = '\n')
+   },
+   warning = function(x, options) {
+     paste('\n\n<div class="alert alert-warning">',
+           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
+           '</div>', sep = '\n')
+   },
+   message = function(x, options) {
+     paste('\n\n<div class="alert alert-info">',
+           gsub('##', '\n', x),
+           '</div>', sep = '\n')
+   }
+)
+
+```
+
+## Package loading
+
+```{r Package loading}
+
+require(pacman)
+
+p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, party, pdp, psych, lmerTest, mice, VIM, missForest, lavaan, semPlot, lattice, sjPlot, hrbrthemes, viridis, rsq, insight)
+
+source('funcs/fun_panel.R')
+
+```
+
+
+
+
+## Open files 
+
+```{r Open file}
+
+# Open the dataframe
+df_Total_Survey <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+  select(-"...1") %>%
+  filter(Block == "Threat" | Block == "Toon" |  Block == "Control")
+
+# Transform some variables as factor
+Factor_Variables <- c("Participant", "response_id", "Block")
+df_Total_Survey[Factor_Variables] <- lapply(df_Total_Survey[Factor_Variables], as.factor)
+
+
+# Build a dataframe in a long format (one score of fear for each block: Threat VS Control VS Toon) except for the fear pretest measurement
+
+df_Survey_Long <- df_Total_Survey  %>%
+  filter(Check_Sound == 1) %>%
+  group_by(response_id, Block) %>%
+  slice(1) %>%
+  ungroup()
+
+
+# Build a dataframe in a wide format
+
+# Pivot the format of the dataframe to translate the fear measure into columns instead of rows
+df_Survey_Wide <- df_Survey_Long %>%
+  pivot_wider(names_from = Block,
+              values_from = c(Fear_Score, Fear_Mean)) 
+
+# Combine the 3 rows for each fear mesurement
+tmp <- df_Survey_Wide %>%
+  select(response_id, Fear_Score_Control, Fear_Score_Threat, Fear_Score_Toon, Fear_Mean_Control, Fear_Mean_Threat, Fear_Mean_Toon) %>% 
+  group_by(response_id) %>% 
+  summarize_all(sum, na.rm = TRUE) %>%
+  ungroup()
+
+# Select one row for each participant
+df_Survey_Wide <- df_Survey_Wide %>%
+  group_by(response_id) %>% 
+  slice(1) %>%
+  select(-c(Fear_Score_Control, Fear_Score_Threat, Fear_Score_Toon, Fear_Mean_Control, Fear_Mean_Threat, Fear_Mean_Toon)) %>%
+  select(-c(Angry, Calm, Anxious, Nervous, Happy, Tense, Stressed, Depressed, Calm_Recod)) %>%
+  ungroup()
+
+# Construct the dataframe in the wide format adding the fearscore to a dataframe with only one row by participant
+df_Survey_Wide <- left_join(df_Survey_Wide, tmp, by = "response_id")
+  
+
+# If We want to add the Fear measurement at pretest in the long format
+
+df_Survey_Long_4var <- df_Survey_Wide %>%
+  pivot_longer(cols = c(Fear_Score_Pretest, Fear_Score_Control, Fear_Score_Threat, Fear_Score_Toon),
+               names_to = "Fear_Measurement",
+               values_to = "Fear_Score") %>%
+  mutate(Fear_Measurement = case_when(Fear_Measurement == "Fear_Score_Pretest" ~ "Pretest",
+                                      Fear_Measurement == "Fear_Score_Control" ~ "Control",
+                                      Fear_Measurement == "Fear_Score_Threat" ~ "Threat",
+                                      Fear_Measurement == "Fear_Score_Toon" ~ "Toon")) %>%
+  select(-c(Fear_Mean_Pretest, Fear_Mean_Control, Fear_Mean_Threat, Fear_Mean_Toon))
+
+# df_Survey_Long_4var_bis <- df_Survey_Wide %>%
+#   pivot_longer(cols = c(Fear_Mean_Pretest, Fear_Mean_Control, Fear_Mean_Threat, Fear_Mean_Toon),
+#                names_to = "Fear_Measurement",
+#                values_to = "Fear_Mean") %>%
+#   select(-c(Fear_Score_Pretest, Fear_Score_Control, Fear_Score_Threat, Fear_Score_Toon))
+
+df_Survey_Long_4var_bis <- df_Survey_Wide %>%
+  pivot_longer(cols = c(Fear_Mean_Pretest, Fear_Mean_Control, Fear_Mean_Threat, Fear_Mean_Toon),
+               names_to = "Fear_Measurement",
+               values_to = "Fear_Mean") %>%
+  mutate(Fear_Measurement = case_when(Fear_Measurement == "Fear_Mean_Pretest" ~ "Pretest",
+                                      Fear_Measurement == "Fear_Mean_Control" ~ "Control",
+                                      Fear_Measurement == "Fear_Mean_Threat" ~ "Threat",
+                                      Fear_Measurement == "Fear_Mean_Toon" ~ "Toon")) %>%
+  select(Participant, Fear_Measurement, Fear_Mean)
+
+
+df_Survey_Long_4var <- dplyr::left_join(df_Survey_Long_4var, df_Survey_Long_4var_bis)
+
+rm(tmp, Factor_Variables, df_Survey_Long_4var_bis)
+
+
+warning("In the final dataframes, we have removed participants who reported not having hear sound during the experiment since these sounds are a critical aspect of this experiment")
+
+```
+
+```{r Survey division}
+
+df_Survey_Wide_Location <- df_Survey_Wide %>%
+  filter(Task_Type_str  == "Localization")
+
+df_Survey_Wide_Catego <- df_Survey_Wide %>%
+  filter(Task_Type_str  == "Categorization")
+
+
+df_Survey_Long_Location <- df_Survey_Long %>%
+  filter(Task_Type_str  == "Localization")
+
+df_Survey_Long_Catego <- df_Survey_Long %>%
+  filter(Task_Type_str  == "Categorization")
+
+
+df_Survey_Long_4var_Location <- df_Survey_Long_4var %>%
+  filter(Task_Type_str  == "Localization")
+
+df_Survey_Long_4var_Catego <- df_Survey_Long_4var %>%
+  filter(Task_Type_str  == "Categorization")
+
+```
+
+
+# Analysis
+
+## Anxiety manipulation check
+
+### Anxiety differences between experimental conditions
+
+
+Here, we analyse if there is significant differences on self reported anxiety after each experimental block. 
+
+
+```{r Fear differences}
+
+# Regression analysis 
+
+# Comparing control to threat and control to toon
+Fear_lmer01_Catego <- lmer(Fear_Mean ~ Block + (1|response_id), data = df_Survey_Long_Catego)
+summary(Fear_lmer01_Catego)
+
+coefs_Fear_lmer01_Catego <- data.frame(coef(summary(Fear_lmer01_Catego)))
+
+
+# Comparing only Threat and Toon conditions
+df_Threat_VS_Toon_Catego <- df_Survey_Long_Catego %>%
+  filter(Block != "Control")
+
+Fear_lmer02_Catego <- lmer(Fear_Mean ~ Block + (1|response_id), data = df_Threat_VS_Toon_Catego)
+summary(Fear_lmer02_Catego)
+
+coefs_Fear_lmer02_Catego <- data.frame(coef(summary(Fear_lmer02_Catego)))
+
+
+# Anxiety mean scores in each condition
+Anxiety_table_Catego <- df_Survey_Long_4var_Catego %>%
+    group_by(Fear_Measurement) %>%
+    summarise_at(vars(Fear_Mean), list(Mean = mean, SD = sd, Ppt_Nb = length))
+
+```
+
+
+To test the effect of experimental induction (Control VS Toon VS Threat) on self reported anxiety after each experimental block, we run a mixed model analysis since each participant is measured three times. In this model, we predict the mean anxiety score by the nature of sounds heard during each block (i.e., no sound in the Control condition, vocalizations in the Toon condition and screams in the Threat condition) and we include the random intercept of participants as the only random factor. Results from this analysis show that participants report significantly higher anxiety after the threat block (M =
+`r round(Anxiety_table_Catego[[3,"Mean"]], digit = 2)`, SD =
+`r round(Anxiety_table_Catego[[3,"SD"]], digit = 2)`) than after the control one (M =
+`r round(Anxiety_table_Catego[[1,"Mean"]], digit = 2)`, SD =
+`r round(Anxiety_table_Catego[[1,"SD"]], digit = 2)`, *b* = `r round(coefs_Fear_lmer01_Catego["BlockThreat", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Fear_lmer01_Catego, type = "ml1")[["BlockThreat"]], digit =0)`) =
+`r round(coefs_Fear_lmer01_Catego["BlockThreat", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Fear_lmer01_Catego["BlockThreat", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Fear_lmer01_Catego["BlockThreat", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Fear_lmer01_Catego["BlockThreat", "Pr...t.."]), digit = 3))))`). They also report significantly higher anxiety than after the toon block (M =
+`r round(Anxiety_table_Catego[[4,"Mean"]], digit = 2)`, SD =
+`r round(Anxiety_table_Catego[[4,"SD"]], digit = 2)`, *b* = `r round(coefs_Fear_lmer02_Catego["BlockToon", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Fear_lmer02_Catego, type = "ml1")[["BlockToon"]], digit =0)`) =
+`r round(coefs_Fear_lmer02_Catego["BlockToon", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Fear_lmer02_Catego["BlockToon", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Fear_lmer02_Catego["BlockToon", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Fear_lmer02_Catego["BlockToon", "Pr...t.."]), digit = 3))))`) and there is no significant difference between the control and the toon blocks (*b* = `r round(coefs_Fear_lmer01_Catego["BlockToon", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Fear_lmer01_Catego, type = "ml1")[["BlockToon"]], digit =0)`) =
+`r round(coefs_Fear_lmer01_Catego["BlockToon", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Fear_lmer01_Catego["BlockToon", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Fear_lmer01_Catego["BlockToon", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Fear_lmer01_Catego["BlockToon", "Pr...t.."]), digit = 3))))`). Scores of anxiety in each experimental condition are reported in the table below: 
+
+```{r Anxiety table}
+
+knitr::kable(Anxiety_table_Catego, 
+             caption = "Self reported anxiety after each block", 
+             digit = 2, 
+             "simple")
+
+```
+
+
+### Visualisation
+
+Here is a visualization of the self reported fear after each experimental block: 
+
+```{r Fear measurement time}
+
+# Reorder the levels of Fear_Measurement
+df_Survey_Long_4var_Catego <- df_Survey_Long_4var_Catego %>%
+  mutate(Fear_Measurement = factor(Fear_Measurement, levels = c("Pretest", "Control", "Threat", "Toon")))
+
+# APA Style Boxplot with Custom Colors and Labels
+df_Survey_Long_4var_Catego %>% 
+  ggplot(aes(x = Fear_Measurement, y = Fear_Mean, fill = Fear_Measurement)) +
+  
+  # Boxplot with customized settings
+  geom_boxplot(alpha = 0.8, color = "black", outlier.shape = 16, outlier.size = 2) +
+  
+  # Color adjustments using viridis palette
+  scale_fill_viridis(discrete = TRUE, alpha = 0.6, begin = 0.2, end = 0.8) +
+  
+  # Custom x-axis labels
+  scale_x_discrete(labels = c("Pretest", "Controle Block", "Threat Block", "Toon Block")) +
+  
+  # Titles and Labels
+  labs(
+    title = "Self-Reported Anxiety after Each Experimental Block",
+    x = "Fear Measurement",  # Rename x-axis
+    y = "Mean Anxiety Score"
+  ) +
+  
+  # APA style theme adjustments
+  theme_minimal(base_size = 12, base_family = "Arial") +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),  # Centered and bold title
+    axis.title.x = element_text(size = 12, margin = margin(t = 10)),   # Adjusted margin for x-axis title
+    axis.title.y = element_text(size = 12, margin = margin(r = 10)),   # Adjusted margin for y-axis title
+    axis.text = element_text(size = 10),                               # Size of axis text
+    legend.position = "none",                                           # Remove legend (as per original request)
+    panel.grid.major = element_blank(),                                # Remove grid lines
+    panel.grid.minor = element_blank(),                                # Remove minor grid lines
+    axis.line = element_line(size = 0.5, color = "black")              # Add axis lines for clarity
+  )
+
+
+
+# Violin plot representation
+
+# df_Survey_Long_4var_Catego %>% 
+#   ggplot( aes(x=Fear_Measurement, y=Fear_Mean, fill=Fear_Measurement)) +
+#     geom_violin(width=1.4) +
+#     geom_boxplot(width=0.1, color="grey", alpha=0.2) +
+#     scale_fill_viridis(discrete = TRUE) +
+#     theme_ipsum() +
+#     theme(
+#       legend.position="none",
+#       plot.title = element_text(size=11)
+#     ) +
+#     ggtitle("Plot of self reported anxiety after each experimental block") +
+#     xlab("")
+
+```
+
+
+### Anxiety evolution between experimental condition
+
+Here, we analyse if there are significant evolution of anxiety from pretest to post-test within each experimental condition
+
+```{r Anxiety evolution}
+
+# Build the evolution score
+
+df_Survey_Wide_Catego <- df_Survey_Wide_Catego %>%
+  mutate(Evol_Threat_Bart = (Fear_Score_Threat - Fear_Score_Pretest),
+         Evol_Control_Bart = (Fear_Score_Control - Fear_Score_Pretest),
+         Evol_Toon_Bart = (Fear_Score_Toon - Fear_Score_Pretest),
+         
+         Evol_Threat_Mean = (Fear_Mean_Threat - Fear_Mean_Pretest),
+         Evol_Control_Mean = (Fear_Mean_Control - Fear_Mean_Pretest),
+         Evol_Toon_Mean = (Fear_Mean_Toon - Fear_Mean_Pretest))
+
+
+# Regression analysis
+
+Evol_lm01_Catego <- lm(Evol_Threat_Mean ~ 1, data = df_Survey_Wide_Catego)
+summary(Evol_lm01_Catego)
+Report_Evol_lm01_Catego <- summary(Evol_lm01_Catego)
+
+Evol_lm02_Catego <- lm(Evol_Control_Mean ~ 1, data = df_Survey_Wide_Catego)
+summary(Evol_lm02_Catego)
+Report_Evol_lm02_Catego <- summary(Evol_lm02_Catego)
+
+Evol_lm03_Catego <- lm(Evol_Toon_Mean ~ 1, data = df_Survey_Wide_Catego)
+summary(Evol_lm03_Catego)
+Report_Evol_lm03_Catego <- summary(Evol_lm03_Catego)
+
+
+warning("Results change if we take the facorial score (e.g., Evol_Threat_Bart) instead of the mean. In this case, in comparison to the pretest, participants tend to report less anxiety after the control block and marginally less after the toon block")
+
+
+```
+
+```{r Evolution differences, include=FALSE}
+
+df_Survey_Long_Catego <- df_Survey_Long_Catego %>%
+  mutate(Evol_Anxiety_Bart = (Fear_Score - Fear_Score_Pretest),
+         Evol_Anxiety_Mean = (Fear_Mean - Fear_Mean_Pretest))
+
+# Anxiety evolution between the pre-test and the post-test in each experimental condition
+Evolution_table_Catego <- df_Survey_Long_Catego %>%
+    group_by(Block) %>%
+    summarise_at(vars(Evol_Anxiety_Mean), list(Mean = mean, SD = sd, Ppt_Nb = length))
+
+
+```
+
+When we analyse the effect of experimental manipulation (sounds heard during blocks of trials) analysis show that participants anxiety significantly increase after the threat block (*b* =
+`r round(Report_Evol_lm01_Catego$coefficients[1,1], digits = 2)`,
+*F*(`r Report_Evol_lm01_Catego$df[1]`, `r Report_Evol_lm01_Catego$df[2]`) =
+`r round(Report_Evol_lm01_Catego$coefficients[1,3], digits = 2)`, *p* 
+`r ifelse((Report_Evol_lm01_Catego$coefficients[1,4])<= 0.001 ,"< 0.001", ifelse((Report_Evol_lm01_Catego$coefficients[1,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Evol_lm01_Catego$coefficients[1,4]), digit = 2))))`). It correspond approximately to an increasing of `r round(Evolution_table_Catego[[2,"Mean"]], digit = 2)` on a 7-point likert scale. Results are the same after the control or the toon blocks. Indeed, there is a significant increasing after these blocks (respectively `r round(Evolution_table_Catego[[1,"Mean"]], digit = 2)` and `r round(Evolution_table_Catego[[3,"Mean"]], digit = 2)` increasings) in reported anxiety comparatively to the pretest measurement (respectively *b* =
+`r round(Report_Evol_lm02_Catego$coefficients[1,1], digits = 2)`,
+*F*(`r Report_Evol_lm02_Catego$df[1]`, `r Report_Evol_lm02_Catego$df[2]`) =
+`r round(Report_Evol_lm02_Catego$coefficients[1,3], digits = 2)`, *p* 
+`r ifelse((Report_Evol_lm02_Catego$coefficients[1,4])<= 0.001 ,"< 0.001", ifelse((Report_Evol_lm02_Catego$coefficients[1,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Evol_lm02_Catego$coefficients[1,4]), digit = 2))))` and *b* =
+`r round(Report_Evol_lm03_Catego$coefficients[1,1], digits = 2)`,
+*F*(`r Report_Evol_lm03_Catego$df[1]`, `r Report_Evol_lm03_Catego$df[2]`) =
+`r round(Report_Evol_lm03_Catego$coefficients[1,3], digits = 2)`, *p* 
+`r ifelse((Report_Evol_lm03_Catego$coefficients[1,4])<= 0.001 ,"< 0.001", ifelse((Report_Evol_lm03_Catego$coefficients[1,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Evol_lm03_Catego$coefficients[1,4]), digit = 2))))`). The evolution scores of anxiety between the pre-measurement and the post measurement within each experimental condition are reported in the table below:
+
+```{r Evolution table_Catego}
+
+knitr::kable(Evolution_table_Catego, 
+             caption = "Evolution Self reported anxiety between the beginning of the experiment and each block measurement", 
+             digit = 2, 
+             "simple")
+
+```
+
+
+```{r Evolution comparisons}
+
+df_Survey_Long_Catego <- df_Survey_Long_Catego %>%
+  mutate(Evol_Anxiety_Bart = (Fear_Score - Fear_Score_Pretest),
+         Evol_Anxiety_Mean = (Fear_Mean - Fear_Mean_Pretest))
+
+# Regression analysis 
+
+# Comparing control to threat and control to toon
+Evol_lmer01_Catego <- lmer(Evol_Anxiety_Mean ~ Block + (1|response_id), data = df_Survey_Long_Catego)
+summary(Evol_lmer01_Catego)
+coefs_Evol_lmer01_Catego <- data.frame(coef(summary(Evol_lmer01_Catego)))
+
+
+# Comparing only Threat and Toon conditions
+df_Threat_VS_Toon_Catego <- df_Survey_Long_Catego %>%
+  filter(Block != "Control")
+
+Evol_lmer02_Catego <- lmer(Evol_Anxiety_Mean ~ Block + (1|response_id), data = df_Threat_VS_Toon_Catego)
+summary(Evol_lmer02_Catego)
+coefs_Evol_lmer02_Catego <- data.frame(coef(summary(Evol_lmer02_Catego)))
+
+
+# Anxiety evolution between the pre-test and the post-test in each experimental condition
+Evolution_table_Catego <- df_Survey_Long_Catego %>%
+    group_by(Block) %>%
+    summarise_at(vars(Evol_Anxiety_Mean), list(Mean = mean, SD = sd, Ppt_Nb = length))
+
+
+```
+
+Finally, to test whether anxiety increasing is higher within the threat block than in other blocks (i.e., control and toon blocks), we ran a mixed model analysis. In this model, we predict the mean anxiety evolution between pre and post-measurement by the nature of sounds heard during each block (i.e., no sound in the Control condition, vocalizations in the Toon condition and screams in the Threat condition) and we include the random intercept of participants as the only random factor. Results from this analysis show that participants report significantly higher anxiety increasing within the threat block (M =
+`r round(Evolution_table_Catego[[2,"Mean"]], digit = 2)`, SD =
+`r round(Evolution_table_Catego[[2,"SD"]], digit = 2)`) than the control one (M =
+`r round(Evolution_table_Catego[[1,"Mean"]], digit = 2)`, SD =
+`r round(Evolution_table_Catego[[1,"SD"]], digit = 2)`, *b* = `r round(coefs_Evol_lmer01_Catego["BlockThreat", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Evol_lmer01_Catego, type = "ml1")[["BlockThreat"]], digit =0)`) =
+`r round(coefs_Evol_lmer01_Catego["BlockThreat", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Evol_lmer01_Catego["BlockThreat", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Evol_lmer01_Catego["BlockThreat", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Evol_lmer01_Catego["BlockThreat", "Pr...t.."]), digit = 3))))`). They also report significantly higher anxiety increasing than after the toon block (M =
+`r round(Evolution_table_Catego[[3,"Mean"]], digit = 2)`, SD =
+`r round(Evolution_table_Catego[[3,"SD"]], digit = 2)`, *b* = `r round(coefs_Evol_lmer02_Catego["BlockToon", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Evol_lmer02_Catego, type = "ml1")[["BlockToon"]], digit =0)`) =
+`r round(coefs_Evol_lmer02_Catego["BlockToon", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Evol_lmer02_Catego["BlockToon", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Evol_lmer02_Catego["BlockToon", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Evol_lmer02_Catego["BlockToon", "Pr...t.."]), digit = 3))))`)
+
+
+. There is no significant difference between the control and the toon blocks (*b* = `r round(coefs_Evol_lmer01_Catego["BlockToon", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(Evol_lmer01_Catego, type = "ml1")[["BlockToon"]], digit =0)`) =
+`r round(coefs_Evol_lmer01_Catego["BlockToon", "t.value"], digits = 2)`, *p* `r ifelse((coefs_Evol_lmer01_Catego["BlockToon", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_Evol_lmer01_Catego["BlockToon", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Evol_lmer01_Catego["BlockToon", "Pr...t.."]), digit = 3))))`)). Scores of anxiety in each experimental condition are reported in the table below: 
+
+
+## PTSD effects
+
+Here, we check whether participant PTSD score have an impact on reported anxiety during the experiment. If so, we may need to control for this variable in further analyses. 
+
+
+### Anxiety at pretest
+
+```{r PTSD at pretest}
+
+# Graphic representation 
+
+tmp_Catego <- df_Survey_Wide_Catego %>%
+  select(Fear_Mean_Pretest, PTSD_Score)
+
+psych::describe(tmp_Catego) %>%
+  kable(., caption = "", digits = 2) %>% 
+  kable_styling(full_width = F, latex_options = c("hold_position", "scale-down"))
+
+pairs.panels.new(tmp_Catego)
+
+# Regression analysis
+
+PTSD_Pretest_lm01_Catego <- lm(Fear_Mean_Pretest ~ PTSD_Score, data = df_Survey_Wide_Catego)
+summary(PTSD_Pretest_lm01_Catego)
+Report_PTSD_Pretest_lm01_Catego <- summary(PTSD_Pretest_lm01_Catego)
+
+
+rm(tmp_Catego)
+
+```
+
+At the beginning of the experiment (i.e., before any anxiety induction), participants who have some PTSD symptoms show significantly higher level of self reported anxiety (*b* =
+`r round(Report_PTSD_Pretest_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_PTSD_Pretest_lm01_Catego$df[1]-Report_PTSD_Pretest_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_PTSD_Pretest_lm01_Catego$df[2]`) =
+`r round(Report_PTSD_Pretest_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_PTSD_Pretest_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_PTSD_Pretest_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_PTSD_Pretest_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(PTSD_Pretest_lm01_Catego)[[1]], digit = 3)`). 
+
+
+
+```{r PTSD effect on anxiety evolution}
+
+# Build the evolution score
+
+df_Survey_Wide_Catego <- df_Survey_Wide_Catego %>%
+  mutate(Evol_Threat_Bart = (Fear_Score_Threat - Fear_Score_Pretest),
+         Evol_Control_Bart = (Fear_Score_Control - Fear_Score_Pretest),
+         Evol_Toon_Bart = (Fear_Score_Toon - Fear_Score_Pretest),
+         
+         Evol_Threat_Mean = (Fear_Mean_Threat - Fear_Mean_Pretest),
+         Evol_Control_Mean = (Fear_Mean_Control - Fear_Mean_Pretest),
+         Evol_Toon_Mean = (Fear_Mean_Toon - Fear_Mean_Pretest))
+
+
+# Predict anxiety evolution within the threat block as a function of the PTSD score
+Anxiety_PTSD_Ctrl_lm01_Catego <- lm(Evol_Control_Mean ~ PTSD_Score, data = df_Survey_Wide_Catego)
+summary(Anxiety_PTSD_Ctrl_lm01_Catego)
+Report_Anxiety_PTSD_Ctrl_lm01_Catego <- summary(Anxiety_PTSD_Ctrl_lm01_Catego)
+
+# Predict anxiety evolution within the threat block as a function of the PTSD score
+Anxiety_PTSD_Toon_lm01_Catego <- lm(Evol_Toon_Mean ~ PTSD_Score, data = df_Survey_Wide_Catego)
+summary(Anxiety_PTSD_Toon_lm01_Catego)
+Report_Anxiety_PTSD_Toon_lm01_Catego <- summary(Anxiety_PTSD_Toon_lm01_Catego)
+
+# Predict anxiety evolution within the threat block as a function of the PTSD score
+Anxiety_PTSD_Threat_lm01_Catego <- lm(Evol_Threat_Mean ~ PTSD_Score, data = df_Survey_Wide_Catego)
+summary(Anxiety_PTSD_Threat_lm01_Catego)
+Report_Anxiety_PTSD_Threat_lm01_Catego <- summary(Anxiety_PTSD_Threat_lm01_Catego)
+
+
+```
+
+
+In addition, people who report more PTSD symptoms tend to react differently to anxiety manipulation. We used mixed models analysis to analyse the effect of PTSD score on the evolution between pre and post-measurement anxiety. Results reveal that the increasing of anxiety within the threat condition is higher for participants with low levels of PTSD scores than for participants with high levels of PTSD scores (*b* = `r round(Report_Anxiety_PTSD_Threat_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Anxiety_PTSD_Threat_lm01_Catego$df[1]-Report_Anxiety_PTSD_Threat_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_PTSD_Threat_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_PTSD_Threat_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_PTSD_Threat_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_PTSD_Threat_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_PTSD_Threat_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(Anxiety_PTSD_Threat_lm01_Catego)[[1]], digit = 3)`). Results are similar when we look at the effect of PTSD score on the increasing in self-reported anxiety within the control block (*b* = `r round(Report_Anxiety_PTSD_Ctrl_lm01_Catego$coefficients[2,1], digits = 3)`,
+*F*(`r Report_Anxiety_PTSD_Ctrl_lm01_Catego$df[1]-Report_Anxiety_PTSD_Ctrl_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_PTSD_Ctrl_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_PTSD_Ctrl_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_PTSD_Ctrl_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_PTSD_Ctrl_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_PTSD_Ctrl_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(Anxiety_PTSD_Ctrl_lm01_Catego)[[1]], digit = 3)`) or the toon condition (*b* = `r round(Report_Anxiety_PTSD_Toon_lm01_Catego$coefficients[2,1], digits = 3)`,
+*F*(`r Report_Anxiety_PTSD_Toon_lm01_Catego$df[1]-Report_Anxiety_PTSD_Toon_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_PTSD_Toon_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_PTSD_Toon_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_PTSD_Toon_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_PTSD_Toon_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_PTSD_Toon_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(Anxiety_PTSD_Toon_lm01_Catego)[[1]], digit = 3)`).
+
+These results suggest that participants who report more PTSD symptoms tend to be less sensitive to anxiety manipulations. Indeed, the more participants report high PTSD score, the less they report increasing levels of anxiety between the pre-measurement and the post-measurement in each block of trials. It means that all participants do not react identically to the threat induction, and participants with high PTSD symptoms tend to react less than other participants. This effect could be due to specifically high levels of self reported anxiety of these participants before any experimental manipulation of anxiety. According to these results, it may be needed to control PTSD score in behavioral data. Here is a plot of the relation between PTSD score and the reported anxiety increasing in the threat block: 
+
+```{r Plot Evol_Threat_Mean ~ PTSD_Score}
+
+plot_model(Anxiety_PTSD_Threat_lm01_Catego, type = "slope")
+
+```
+
+
+
+```{r PTSD X condition interaction, include=FALSE}
+
+# Here, we analyse whether the effect of PTSD on anxiety evolution is more or less important in each condition, comparing them two by two
+
+# Build codes to test interaction between PTSD and Condition
+
+df_Survey_Long_Catego <- df_Survey_Long_Catego %>%
+  mutate(Cod_Threat_VS_Ctrl = case_when(Block == "Control" ~ -0.5, 
+                                        Block == "Threat" ~ +0.5, 
+                                        TRUE ~ 0), 
+         Cod_Toon_VS_Ctrl = case_when(Block == "Control" ~ -0.5, 
+                                      Block == "Toon" ~ +0.5, 
+                                      TRUE ~ 0), 
+         Cod_Threat_VS_Toon = case_when(Block == "Toon" ~ -0.5, 
+                                      Block == "Threat" ~ +0.5, 
+                                      TRUE ~ 0) )
+
+# Regression analysis 
+
+## Comparing control to threat conditions
+
+df_Threat_VS_Ctrl_Catego <- df_Survey_Long_Catego %>%
+  filter(Block != "Toon")
+
+PTSD_Evol_lmer01_Catego <- lmer(Evol_Anxiety_Mean ~ Cod_Threat_VS_Ctrl * PTSD_Score + (1 | response_id), data = df_Threat_VS_Ctrl_Catego)
+summary(PTSD_Evol_lmer01_Catego)
+
+plot_model(PTSD_Evol_lmer01_Catego, type = "int")
+
+
+## Comparing control to toon conditions
+
+df_Toon_VS_Ctrl_Catego <- df_Survey_Long_Catego %>%
+  filter(Block != "Threat")
+
+PTSD_Evol_lmer02_Catego <- lmer(Evol_Anxiety_Mean ~ Cod_Toon_VS_Ctrl * PTSD_Score + (1 | response_id), data = df_Toon_VS_Ctrl_Catego)
+summary(PTSD_Evol_lmer02_Catego)
+
+plot_model(PTSD_Evol_lmer02_Catego, type = "int")
+
+
+## Comparing Threat to Toon conditions
+df_Threat_VS_Toon_Catego <- df_Survey_Long_Catego %>%
+  filter(Block != "Control")
+
+PTSD_Evol_lmer03_Catego <- lmer(Evol_Anxiety_Mean ~ Cod_Threat_VS_Toon * PTSD_Score + (1 | response_id), data = df_Threat_VS_Toon_Catego)
+summary(PTSD_Evol_lmer03_Catego)
+
+plot_model(PTSD_Evol_lmer03_Catego, type = "int")
+
+
+# Simple effect 
+
+df_Threat_VS_Toon_Catego <- df_Threat_VS_Toon_Catego %>%
+  mutate(Simple_Threat = case_when(Block == "Toon" ~ 1, 
+                                   Block == "Threat" ~ 0))
+
+PTSD_Evol_lmer003_Catego <- lmer(Evol_Anxiety_Mean ~ Simple_Threat * PTSD_Score + (1 | response_id), data = df_Threat_VS_Toon_Catego)
+summary(PTSD_Evol_lmer003_Catego)
+
+
+```
+
+
+```{r PTSD interaction plot, include=FALSE}
+plot_model(PTSD_Evol_lmer03_Catego, type = "int")
+
+```
+
+
+## Other checks
+
+Here, we analyse if reported anxiety differ between participants who change the volume of sound after the calibration phase and those who do not. We also analyse whether participant who didn't consider the sound as unpleasant report the same levels of anxiety as other participants. Since the threat block induce anxiety whereas other blocks do not, we run these analyses on this specific block. 
+
+```{r ThreatBlock dataframe, include=FALSE}
+
+df_Evol_Threat_Catego <- df_Survey_Long_Catego %>%
+  filter(Block == "Threat")
+
+```
+
+
+### Sound unpleasantness
+
+```{r Sound unpleasantness}
+
+Sound_Unpleasant_lm01_Catego <- lm(Evol_Anxiety_Mean ~ Check_Uncomfort, data = df_Evol_Threat_Catego)
+summary(Sound_Unpleasant_lm01_Catego)
+
+Report_Sound_Unpleasant_lm01_Catego <- summary(Sound_Unpleasant_lm01_Catego)
+
+# Anxiety evolution between the pre-test and the post-test in each experimental condition
+Unspleasant_table_Catego <- df_Evol_Threat_Catego %>%
+    group_by(Check_Uncomfort) %>%
+    summarise_at(vars(Evol_Anxiety_Mean), list(Mean = mean, SD = sd, Ppt_Nb = length))
+
+```
+
+Participants who do not consider listening the sounds at an unpleasant volume during the experiment show a marginally lower anxiety increasing between the pre and post measurement (M =
+`r round(Unspleasant_table_Catego[[1,"Mean"]], digit = 2)`, SD =
+`r round(Unspleasant_table_Catego[[1,"SD"]], digit = 2)`, n = `r round(Unspleasant_table_Catego[[1,"Ppt_Nb"]], digit = 2)`) in comparison to other participants (M =
+`r round(Unspleasant_table_Catego[[2,"Mean"]], digit = 2)`, SD =
+`r round(Unspleasant_table_Catego[[2,"SD"]], digit = 2)`, n = `r round(Unspleasant_table_Catego[[2,"Ppt_Nb"]], digit = 2)`, *b* =
+`r round(Report_Sound_Unpleasant_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Sound_Unpleasant_lm01_Catego$df[1]-Report_Sound_Unpleasant_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Sound_Unpleasant_lm01_Catego$df[2]`) =
+`r round(Report_Sound_Unpleasant_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Sound_Unpleasant_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Sound_Unpleasant_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Sound_Unpleasant_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(Sound_Unpleasant_lm01_Catego)[[1]], digit = 3)`) 
+
+
+### Volume modification
+
+```{r Volume modification}
+
+Volum_Modif_lm01_Catego <- lm(Evol_Anxiety_Mean ~ Check_Volume, data = df_Evol_Threat_Catego)
+summary(Volum_Modif_lm01_Catego)
+
+Report_Volum_Modif_lm01_Catego <- summary(Volum_Modif_lm01_Catego)
+
+# Anxiety evolution between the pre-test and the post-test in each experimental condition
+Volume_table_Catego <- df_Evol_Threat_Catego %>%
+    group_by(Check_Volume) %>%
+    summarise_at(vars(Evol_Anxiety_Mean), list(Mean = mean, SD = sd, Ppt_Nb = length))
+
+```
+
+Participants who modify the volume of their computer after the beginning of the experiment do not show significant difference with participants who keep the same volume as after the calibration (respectively M =
+`r round(Volume_table_Catego[[1,"Mean"]], digit = 2)`, SD =
+`r round(Volume_table_Catego[[1,"SD"]], digit = 2)`, n = `r round(Volume_table_Catego[[1,"Ppt_Nb"]], digit = 2)`, and M =
+`r round(Volume_table_Catego[[2,"Mean"]], digit = 2)`, SD =
+`r round(Volume_table_Catego[[2,"SD"]], digit = 2)`, n = `r round(Volume_table_Catego[[2,"Ppt_Nb"]], digit = 2)`) in terms of induced-anxiety (*b* =
+`r round(Report_Volum_Modif_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Volum_Modif_lm01_Catego$df[1]-Report_Volum_Modif_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Volum_Modif_lm01_Catego$df[2]`) =
+`r round(Report_Volum_Modif_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Volum_Modif_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Volum_Modif_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Volum_Modif_lm01_Catego$coefficients[2,4]), digit = 2))))`, η² = `r round(rsq(Volum_Modif_lm01_Catego)[[1]], digit = 3)`)
+
+
+
+## Threatening nature of sounds
+
+Here, we test whether the screams are perceived by participants as more threatening than vocalizations. 
+
+```{r Screams and Vocalizations}
+
+# Graphic representation 
+
+tmp_Catego <- df_Survey_Wide_Catego %>%
+  select(Threat_Scream1, Threat_Scream2, Threat_Vocal1, Threat_Vocal2)
+
+psych::describe(tmp_Catego) %>%
+  kable(., caption = "", digits = 2) %>% 
+  kable_styling(full_width = F, latex_options = c("hold_position", "scale-down"))
+
+pairs.panels.new(tmp_Catego)
+
+
+```
+
+```{r Threat by sounds}
+
+df_Survey_Wide_Catego <- df_Survey_Wide_Catego %>%
+  mutate(Threat_by_sounds = (Threat_Scream1 - Threat_Vocal1), 
+         Concerned_by_sounds = (Threat_Scream2 - Threat_Vocal2)) %>%
+  
+  mutate(Threat_Scream_Mean = rowMeans(select(df_Survey_Wide_Catego,c(Threat_Scream1, Threat_Scream2))), 
+         Threat_Vocal_Mean = rowMeans(select(df_Survey_Wide_Catego,c(Threat_Vocal1, Threat_Vocal2)))) %>%
+  
+  mutate(Threat_Sounds_Mean = (Threat_Scream_Mean - Threat_Vocal_Mean))
+
+
+# Theatening nature of sounds: Are Screams more threatening than vacalizations
+Threatening_Sounds_Catego <- lm(Threat_Sounds_Mean ~ 1 , data = df_Survey_Wide_Catego)
+summary(Threatening_Sounds_Catego)
+
+Report_Threatening_Sounds_Catego <- summary(Threatening_Sounds_Catego)
+
+
+# Is Sense of threat by screams higher than Sense of threat by vocalizations ?
+Sound_Threat_Catego <- lm(Threat_by_sounds ~ 1 , data = df_Survey_Wide_Catego)
+summary(Sound_Threat_Catego)
+
+Report_Sound_Threat_Catego <- summary(Sound_Threat_Catego)
+
+
+# Do participants feel more preoccupied by screams happening than by vocalizations happening ?
+Sound_Concerned_Catego <- lm(Concerned_by_sounds ~ 1 , data = df_Survey_Wide_Catego)
+summary(Sound_Concerned_Catego)
+
+Report_Sound_Concerned_Catego <- summary(Sound_Concerned_Catego)
+
+
+```
+
+People significantly judge  more threatening the screams (M =
+`r round(mean(df_Survey_Wide_Catego$Threat_Scream1), digit = 2)`, SD =
+`r round(sd(df_Survey_Wide_Catego$Threat_Scream1), digit = 2)`) in comparison to the vocalizations (M =
+`r round(mean(df_Survey_Wide_Catego$Threat_Vocal1), digit = 2)`, SD =
+`r round(sd(df_Survey_Wide_Catego$Threat_Vocal1), digit = 2)`, *b* =
+`r round(Report_Sound_Threat_Catego$coefficients[1,1], digits = 2)`,
+*F*(`r Report_Sound_Threat_Catego$df[1]`, `r Report_Sound_Threat_Catego$df[2]`) =
+`r round(Report_Sound_Threat_Catego$coefficients[1,3], digits = 2)`, *p* 
+`r ifelse((Report_Sound_Threat_Catego$coefficients[1,4])<= 0.001 ,"< 0.001", ifelse((Report_Sound_Threat_Catego$coefficients[1,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Sound_Threat_Catego$coefficients[1,4]), digit = 2))))`). 
+
+Moreover, poeple feel significantly more preoccupied by the screams sounds (M =
+`r round(mean(df_Survey_Wide_Catego$Threat_Scream2), digit = 2)`, SD =
+`r round(sd(df_Survey_Wide_Catego$Threat_Scream2), digit = 2)`) in comparison to the vocalizations (M =
+`r round(mean(df_Survey_Wide_Catego$Threat_Vocal2), digit = 2)`, SD =
+`r round(sd(df_Survey_Wide_Catego$Threat_Vocal2), digit = 2)`, *b* =
+`r round(Report_Sound_Concerned_Catego$coefficients[1,1], digits = 2)`,
+*F*(`r Report_Sound_Concerned_Catego$df[1]`, `r Report_Sound_Concerned_Catego$df[2]`) =
+`r round(Report_Sound_Concerned_Catego$coefficients[1,3], digits = 2)`, *p* 
+`r ifelse((Report_Sound_Concerned_Catego$coefficients[1,4])<= 0.001 ,"< 0.001", ifelse((Report_Sound_Concerned_Catego$coefficients[1,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Sound_Concerned_Catego$coefficients[1,4]), digit = 2))))`).
+
+
+```{r Anxiety predict by threat and preoccupation}
+
+# Build the evolution score
+
+df_Survey_Wide_Catego <- df_Survey_Wide_Catego %>%
+  mutate(Evol_Threat_Bart = (Fear_Score_Threat - Fear_Score_Pretest),
+         Evol_Control_Bart = (Fear_Score_Control - Fear_Score_Pretest),
+         Evol_Toon_Bart = (Fear_Score_Toon - Fear_Score_Pretest),
+         
+         Evol_Threat_Mean = (Fear_Mean_Threat - Fear_Mean_Pretest),
+         Evol_Control_Mean = (Fear_Mean_Control - Fear_Mean_Pretest),
+         Evol_Toon_Mean = (Fear_Mean_Toon - Fear_Mean_Pretest)) %>%
+  
+  mutate(Threat_Scream_Mean = rowMeans(select(df_Survey_Wide_Catego,c(Threat_Scream1, Threat_Scream2))), 
+         Threat_Vocal_Mean = rowMeans(select(df_Survey_Wide_Catego,c(Threat_Vocal1, Threat_Vocal2))))
+
+
+################ Threatening nature of screams
+
+# Predict anxiety evolution within the threat block as a function of the threat and the proccupation with screams
+Anxiety_Screams_lm01_Catego <- lm(Evol_Threat_Mean ~ Threat_Scream1 + Threat_Scream2, data = df_Survey_Wide_Catego)
+summary(Anxiety_Screams_lm01_Catego)
+Report_Anxiety_Screams_lm01_Catego <- summary(Anxiety_Screams_lm01_Catego)
+
+# Take sense of threat generated by screams as a single predictor
+Anxiety_Screams_lm02_Catego <- lm(Evol_Threat_Mean ~ Threat_Scream1 , data = df_Survey_Wide_Catego)
+summary(Anxiety_Screams_lm02_Catego)
+Report_Anxiety_Screams_lm02_Catego <- summary(Anxiety_Screams_lm02_Catego)
+
+# Take sense of threat generated by screams combining the two items of threatening nature of screams
+Anxiety_Screams_lmMean_Catego <- lm(Evol_Threat_Mean ~ Threat_Scream_Mean , data = df_Survey_Wide_Catego)
+summary(Anxiety_Screams_lmMean_Catego)
+Report_Anxiety_Screams_lmMean_Catego <- summary(Anxiety_Screams_lmMean_Catego)
+
+
+
+################ Threatening nature of vocalizations
+
+# Predict anxiety evolution within the toon block as a function of the threat and the proccupation with vocalizations
+Anxiety_Vocaliz_lm01_Catego <- lm(Evol_Toon_Mean ~ Threat_Vocal1 + Threat_Vocal2, data = df_Survey_Wide_Catego)
+summary(Anxiety_Vocaliz_lm01_Catego)
+Report_Anxiety_Vocaliz_lm01_Catego <- summary(Anxiety_Vocaliz_lm01_Catego)
+
+# Take sense of threat generated by vocalizations as a single predictor
+Anxiety_Vocaliz_lm02_Catego <- lm(Evol_Toon_Mean ~ Threat_Vocal1 , data = df_Survey_Wide_Catego)
+summary(Anxiety_Vocaliz_lm02_Catego)
+Report_Anxiety_Vocaliz_lm02_Catego <- summary(Anxiety_Vocaliz_lm02_Catego)
+
+# Take sense of threat generated by vocalizations combining the two items of threatening nature of vocalizations
+Anxiety_Vocaliz_lmMean_Catego <- lm(Evol_Toon_Mean ~ Threat_Vocal_Mean , data = df_Survey_Wide_Catego)
+summary(Anxiety_Vocaliz_lmMean_Catego)
+Report_Anxiety_Vocaliz_lmMean_Catego <- summary(Anxiety_Vocaliz_lmMean_Catego)
+
+
+
+```
+
+
+Finally, analysis reveal that these preoccupations and the sense of threat generated by screams significantly predict the increasing of self reported anxiety during the threat block (*b* = `r round(Report_Anxiety_Screams_lm01_Catego$coefficients[3,1], digits = 2)`,
+*F*(`r Report_Anxiety_Screams_lm01_Catego$df[1]-Report_Anxiety_Screams_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Screams_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_Screams_lm01_Catego$coefficients[3,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Screams_lm01_Catego$coefficients[3,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Screams_lm01_Catego$coefficients[3,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Screams_lm01_Catego$coefficients[3,4]), digit = 2))))`, η²p = `r round(rsq.partial(Anxiety_Screams_lm01_Catego)[["partial.rsq"]][2], digit = 3)`). However, the sense of threat generated by screams do not significantly predict the increasing of self reported anxiety during this block when entered in the same model than preoccupations (*b* = `r round(Report_Anxiety_Screams_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Anxiety_Screams_lm01_Catego$df[1]-Report_Anxiety_Screams_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Screams_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_Screams_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Screams_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Screams_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Screams_lm01_Catego$coefficients[2,4]), digit = 2))))`, η²p = `r round(rsq.partial(Anxiety_Screams_lm01_Catego)[["partial.rsq"]][1], digit = 3)`), even if this variable is significant when entered as a single predictor (*b* = `r round(Report_Anxiety_Screams_lm02_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Anxiety_Screams_lm02_Catego$df[1]-Report_Anxiety_Screams_lm02_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Screams_lm02_Catego$df[2]`) =
+`r round(Report_Anxiety_Screams_lm02_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Screams_lm02_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Screams_lm02_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Screams_lm02_Catego$coefficients[2,4]), digit = 2))))`, η²p = `r round(rsq(Anxiety_Screams_lm02_Catego), digit = 3)`)
+
+```{r Plot Evol_Threat_Mean ~ Threat_Scream1 + Threat_Scream2}
+
+plot_model(Anxiety_Screams_lm01_Catego, type = "slope")
+
+```
+
+
+In the toon block, preoccupation generated by vocalisations significantly predict the increasing of self reported anxiety (respectively *b* = `r round(Report_Anxiety_Vocaliz_lm01_Catego$coefficients[3,1], digits = 2)`,
+*F*(`r Report_Anxiety_Vocaliz_lm01_Catego$df[1]-Report_Anxiety_Vocaliz_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Vocaliz_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_Vocaliz_lm01_Catego$coefficients[3,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[3,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[3,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[3,4]), digit = 2))))`, η²p = `r round(rsq.partial(Anxiety_Vocaliz_lm01_Catego)[["partial.rsq"]][2], digit = 3)`). Again, sense of threat generated by vocalisations do not significantly predict the increasing of self reported anxiety when entered in the same model as preoccupation (*b* = `r round(Report_Anxiety_Vocaliz_lm01_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Anxiety_Vocaliz_lm01_Catego$df[1]-Report_Anxiety_Vocaliz_lm01_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Vocaliz_lm01_Catego$df[2]`) =
+`r round(Report_Anxiety_Vocaliz_lm01_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Vocaliz_lm01_Catego$coefficients[2,4]), digit = 2))))`, η²p = `r round(rsq.partial(Anxiety_Vocaliz_lm01_Catego)[["partial.rsq"]][1], digit = 3)`), but is significant when entered as a single predictor (*b* = `r round(Report_Anxiety_Vocaliz_lm02_Catego$coefficients[2,1], digits = 2)`,
+*F*(`r Report_Anxiety_Vocaliz_lm02_Catego$df[1]-Report_Anxiety_Vocaliz_lm02_Catego[["fstatistic"]][["numdf"]]`, `r Report_Anxiety_Vocaliz_lm02_Catego$df[2]`) =
+`r round(Report_Anxiety_Vocaliz_lm02_Catego$coefficients[2,3], digits = 2)`, *p* 
+`r ifelse((Report_Anxiety_Vocaliz_lm02_Catego$coefficients[2,4])<= 0.001 ,"< 0.001", ifelse((Report_Anxiety_Vocaliz_lm02_Catego$coefficients[2,4])<= 0.01 ,"< 0.01", paste0("= ", round((Report_Anxiety_Vocaliz_lm02_Catego$coefficients[2,4]), digit = 2))))`, η²p = `r round(rsq(Anxiety_Vocaliz_lm02_Catego), digit = 3)`). We should therefore take these variables into account in subsequent behavioral analyses.
+
+
+```{r plot Evol_Threat_Mean ~ Threat_Vocal1 + Threat_Vocal2}
+
+plot_model(Anxiety_Vocaliz_lm01_Catego, type = "slope")
+
+```
+
+
+```{r Saving environment, eval = FALSE}
+
+save.image("~/Psycho/Doctorat Clermont-Ferrand/Procédures expérimentations/FolkRemington_Etude1/Threat_SpatialCueing/Environment saving/Survey_Analysis_Catego_2024-10-08.RData")
+
+save.image("~/Psycho/Doctorat Clermont-Ferrand/Ecriture de These/Chaptitres/Thesis_Bookdown/EnvironmentSaving/Part1_Menace/Survey_Analysis_Catego_2024-10-08.RData")
+
+
+```
+

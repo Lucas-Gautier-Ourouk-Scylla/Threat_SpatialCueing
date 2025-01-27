@@ -1,0 +1,2834 @@
+---
+title: "Analysis_CategoTask"
+author: "Ourouk Scylla Lucas Gautier"
+date: '2024-06-12'
+output:
+  html_document:
+    code_folding: hide
+    mathjax: default
+    theme: united
+    toc: yes
+    toc_float: yes
+    number_sections: TRUE
+  pdf_document:
+    toc: yes
+---
+
+# Aim
+
+This script is an analysis script for the project "Threat_Spatial Cueing" that study the impact of a threat on attention processes. It use a spatial cueing paradigm and want to replicate the results of Normand et al., (2014) of a reinforcement of the contingent attentional capture using the Threat of Screams paradigm instead of a self-evaluative threat.
+
+This script analyse data from participants who complete the categorization task (instead of the location task)
+
+The OSf link of this project is available at: <https://osf.io/jkt9m/> Preregistration is available at : <https://osf.io/nhxub>
+
+ Useful Biblio on mixed models: 
+<https://bookdown.org/steve_midway/DAR/random-effects.html>
+<https://stackoverflow.com/questions/75243345/how-to-report-random-effect-in-the-mixed-effects-model>
+<https://mspeekenbrink.github.io/sdam-r-companion/linear-mixed-effects-models.html>
+
+# Preregistration deviations
+
+Contrary to our preregistration, we run our analysis not on the factorial score of anxiety but preferred the Mean composite score. Indeed, these scores are easier to interpret and understand.
+
+# Option settings and data loading
+
+## Knit options
+
+```{r setup}
+
+knitr::opts_chunk$set(message = FALSE, 
+                      warning = FALSE)
+
+knitr::knit_hooks$set(
+   error = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
+           '</div>', sep = '\n')
+   },
+   warning = function(x, options) {
+     paste('\n\n<div class="alert alert-warning">',
+           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
+           '</div>', sep = '\n')
+   },
+   message = function(x, options) {
+     paste('\n\n<div class="alert alert-info">',
+           gsub('##', '\n', x),
+           '</div>', sep = '\n')
+   }
+)
+
+```
+
+## Package loading
+
+```{r Package loading}
+
+require(pacman)
+
+p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, party, pdp, psych, lmerTest, mice, VIM, missForest, lavaan, semPlot, lattice, sjPlot, broom.mixed, buildmer, performance, insight, MVN, ggplot2)
+
+```
+
+## Open files
+
+```{r Open file}
+
+# Open the dataframe
+
+df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+  select(-"...1")
+
+
+df_Categorization_Full <- df_Total %>%
+  filter(Task_Type_str  == "Categorization")
+
+# Build the self reported anxiety evolution score (difference between pretest and each post-test  measurement) and the composite score of preoccupation about sounds
+df_Categorization_Full <- df_Categorization_Full %>%
+  mutate(Evol_Anxiety_Bart = (Fear_Score - Fear_Score_Pretest),
+         Evol_Anxiety_Mean = (Fear_Mean - Fear_Mean_Pretest)) %>%
+  mutate(Threat_Scream_Tot = rowMeans(select(df_Categorization_Full,c(Threat_Scream1, Threat_Scream2))),
+         Threat_Vocal_Tot = rowMeans(select(df_Categorization_Full,c(Threat_Vocal1, Threat_Vocal2))))
+
+# Reduce the dataframe to relevant rows and to participants who complete the categorization task
+
+df_Catego <- df_Categorization_Full %>%
+  filter(Block == "Threat" | Block == "Toon" |  Block == "Control") %>%
+  filter(Check_Sound == 1)
+
+# Transform some variables as factor
+Factor_Variables <- c("Participant", "response_id", "Block")
+df_Catego[Factor_Variables] <- lapply(df_Catego[Factor_Variables], as.factor)
+  
+
+warning("In the final dataframe ('df_Catego'), we removed participants who reported that they did not hear any sounds during the experiment, given that these sounds are an essential aspect of the experiment")
+
+```
+
+```{r Suppressions counting, include = FALSE}
+
+# Participants who didn't hear sounds
+
+N_No_Sound <- df_Categorization_Full %>%
+  filter(Check_Sound == 2)
+
+N_No_Sound$response_id <- factor(N_No_Sound$response_id)
+
+nlevels(N_No_Sound$response_id)
+
+```
+
+In the final dataframe ('df_Catego'), we have removed : - training trials (rows = `r table(df_Categorization_Full$Block)[["Training"]]`) - rows that represent sounds happening (rows = `r (table(df_Categorization_Full$Block)[["Scream"]] + table(df_Categorization_Full$Block)[["Vocalization"]])`) - participants who report not having hear sounds during the whole experiment (n = `r (nlevels(N_No_Sound$response_id))`)
+
+The final dataset contains n = `r (nlevels(df_Catego$response_id))` participants.
+
+# Analysis
+
+## Accuracy
+
+### Calculate participant accuracy
+
+```{r Participant Accuracy}
+
+Accuracy_Df <- df_Catego %>%
+  group_by(response_id) %>%
+  summarise(Accuracy_Rate=(length(which(Response_Status == 1))/length(response_id)), n=length(response_id))
+
+df_Catego <- left_join(df_Catego, Accuracy_Df)
+df_Catego <- df_Catego %>% select(-n)
+
+
+hist(Accuracy_Df$Accuracy_Rate)
+
+```
+
+### Effect of Condition on accuracy
+
+#### Model comparison to predict accuracy
+In the model comparison phase, we assign NA to rows without any response on the task but we do not remove any other participants or rows.
+
+```{r Rapartition between variables, eval=FALSE}
+
+# See the contingencies between each variable
+
+xtabs(~ response_id + Target_Type,df_Catego)
+
+xtabs(~ Target_Position + Target_Type,df_Catego)
+
+```
+
+
+```{r Condition accuracy, eval = FALSE}
+
+# Find the best random effect structure to predict the data 
+Accuracy_glmer_MaxMod_Binom <- buildmer(Accuracy ~ Congruency_C * Validity_C * Condition_C +
+                             (Congruency_C*Validity_C*Condition_C|| response_id) +
+                             (Congruency_C*Validity_C*Condition_C|| Target_Type),
+                           data = df_Catego, 
+                           buildmerControl = buildmerControl(include = ~ Congruency_C * Validity_C * Condition_C,
+                                                             family=binomial,
+                                                             calc.anova = TRUE, 
+                                                             calc.summary = TRUE, 
+                                                             ddf = "Satterthwaite"))
+
+# Summarise the choosen model
+summary(Accuracy_glmer_MaxMod_Binom)
+
+# Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_glmer_MaxMod_Binom.RData", Accuracy_glmer_MaxMod_Binom)
+
+# Give the fomula of the choosen model
+formula(Accuracy_glmer_MaxMod_Binom)
+
+
+### The final Model
+
+# Build the mixed model based on the best model after the model comparison 
+Accuracy_ModFinal_NoCorr <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+                             (Congruency_C*Validity_C + Congruency_C*Condition_C || response_id) +
+                             (Congruency_C || Target_Type),
+                         family ="binomial",
+                         nAGQ = 0,
+                         data = df_Catego)
+
+# Summarise the  model
+summary(Accuracy_ModFinal_NoCorr)
+
+formula_Accuracy_ModFinal <- formula(Accuracy_ModFinal_NoCorr)
+
+# Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_NoCorr.RData", Accuracy_ModFinal_NoCorr)
+
+# Give the variance terms of the model to see if some random effects could be drop
+VarCorr(Accuracy_ModFinal_NoCorr)
+summary(rePCA(Accuracy_ModFinal_NoCorr))
+
+
+# The final model is the model Accuracy_glmer003. 
+
+
+```
+
+The final model we use to predict Accuracy is: 
+
+```
+Accuracy ~ Congruency_C*Validity_C*Condition_C +
+            (Congruency_C*Validity_C + Congruency_C*Condition_C || response_id) +
+            (Congruency_C || Target_Type)
+```
+
+#### Main analysis
+
+```{r Neutral dataframe}
+
+df_Catego_NoNeut <- df_Catego %>%
+  filter(Congruency != "NoCongruency") %>%
+  filter(Block != "Toon")
+
+warning("In the 'df_Catego_NoNeut' dataframe, we removed trials of the toon block and no-congruency/no-validity trials")
+
+# Build a dataframe WITH the toon condition and WITH no-congruency trials but which respect preregistration exclusion criterion
+df_Catego_Prereg_Excl_Acc <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+```
+
+##### No exclusion criterion
+
+In these analyses, we assign NA to rows without any response on the task
+but we do not remove any participant with really low or speed responses. However we ran analysis removing the toon trials and No-Valdity/No-Congruency trials.
+
+
+```{r Accuracy effect No exclusion}
+
+
+# Accuracy_ModFinal_NoExcl <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+#                                     (Congruency_C*Validity_C + Congruency_C*Condition_C || response_id) +
+#                                     (Congruency_C || Target_Type),
+#                                   family ="binomial",
+#                                   nAGQ = 0,
+#                                   data = df_Catego_NoNeut)
+# 
+# VarCorr(Accuracy_ModFinal_NoExcl)
+# summary(rePCA(Accuracy_ModFinal_NoExcl))
+
+# According to a problem in the model while computing the random effect variances, we drop some small random effects of the choosen model.  
+
+# Accuracy_ModFinal_NoExcl <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+#                                     (Congruency_C:Validity_C + Congruency_C*Condition_C || response_id) +
+#                                     (Congruency_C || Target_Type),
+#                                   family ="binomial",
+#                                   nAGQ = 0,
+#                                   data = df_Catego_NoNeut)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_NoExcl.RData", Accuracy_ModFinal_NoExcl)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_NoExcl.RData")
+
+summary(Accuracy_ModFinal_NoExcl)
+performance::model_performance(Accuracy_ModFinal_NoExcl)
+
+
+```
+
+
+###### Pre-registration exclusion
+
+Here, we apply the mixed effect model to predict RT after the exclusion of participants and rows based on or preregistration: 
+    - No response before the end of trial (>1500ms)
+    - RT > 3MAD or RT < 3MAD
+    - Participants with an accuracy rate < 3MAD (Accuracy rate < `r round(median(df_Catego$Accuracy_Rate)-3*mad(df_Catego$Accuracy_Rate), digit = 2)`)
+
+
+```{r Accuracy effect Prereg exclusion}
+
+
+df_Catego_NoNeut_Prereg_Excl_Acc <- df_Catego_NoNeut %>%
+  filter(Response_Status != 3) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+
+# Accuracy_ModFinal_Prereg_Excl <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+#                                          (Congruency_C:Validity_C + Congruency_C*Condition_C || response_id) +
+#                                          (Congruency_C || Target_Type),
+#                                        family ="binomial",
+#                                        nAGQ = 0,
+#                                        data = df_Catego_NoNeut_Prereg_Excl_Acc)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_Prereg_Excl.RData", Accuracy_ModFinal_Prereg_Excl)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_Prereg_Excl.RData")
+
+summary(Accuracy_ModFinal_Prereg_Excl)
+performance::model_performance(Accuracy_ModFinal_Prereg_Excl)
+
+
+```
+
+
+###### Outlier exclusion
+
+Here, we remove trials reflecting outliers in terms of Studentized residuals, hat values and cook distance. For that we removed rows with : 
+    - Studentized residuals > 3 or Studentized residuals < -3
+    - Hat values > .80 (its a relative threshold based on histogram and visual inspection of these values)
+    - Cook distance > 1.30 (its a relative threshold based on histogram and visual inspection of these values)
+
+
+
+```{r Accuracy effect}
+
+df_Catego_NoNeut_Prereg_Excl_Acc <- df_Catego_NoNeut_Prereg_Excl_Acc %>%
+  mutate(Hat_Acc_1 = hatvalues(Accuracy_ModFinal_Prereg_Excl)) %>%
+  mutate(Rstud_Acc_1 = rstudent(Accuracy_ModFinal_Prereg_Excl))%>%
+  mutate(Cook_Acc_1 = cooks.distance(Accuracy_ModFinal_Prereg_Excl))
+
+
+df_Catego_NoNeut_Prereg_Excl_Acc_Out <- df_Catego_NoNeut_Prereg_Excl_Acc %>%
+  filter(Rstud_Acc_1 <= 3 & Rstud_Acc_1 >= -3) %>%
+  filter(Hat_Acc_1 <= .80) %>%
+  filter(Cook_Acc_1 <= 1.30)
+
+# Accuracy_ModFinal <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+#                              (Congruency_C:Validity_C + Congruency_C*Condition_C || response_id) +
+#                              (Congruency_C || Target_Type),
+#                            family ="binomial",
+#                            nAGQ = 0,
+#                            data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal.RData", Accuracy_ModFinal)
+
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal.RData")
+
+summary(Accuracy_ModFinal)
+performance::model_performance(Accuracy_ModFinal)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_ModFinal <- data.frame(coef(summary(Accuracy_ModFinal)))
+
+# Get parameters for model' fixed effects
+effects_Accuracy_ModFinal <- broom.mixed::tidy(Accuracy_ModFinal)
+
+# Get odd ratios instead of fbeta for fixed effects
+OR_Accuracy_ModFinal <- as.data.frame(broom.mixed::tidy(Accuracy_ModFinal,conf.int=TRUE,exponentiate=TRUE,effects="fixed"))
+OR_Accuracy_ModFinal <- data.frame(OR_Accuracy_ModFinal, row.names = "term")
+
+# Calculate the overall model performance
+perf_Accuracy_ModFinal <- performance::model_performance(Accuracy_ModFinal)
+
+# # To extract fixed effects
+# fixef(Accuracy_ModFinal)
+
+
+```
+
+
+#### Results
+
+
+To analyse the effect of the experimental condition on accuracy, we run a mixed model analysis using `lme4` package (Bates, Maechler & Bolker, 2012). In this analysis, we used the accuracy of each trial as the outcome and each terms of the 3-way interaction as the predictor variable: 2 Validity (Invalid VS Valid) x 2 Congruency (Incongruent VS Congruent) x 3 (Control VS Toon VS Threat). As random effects, according to a model comparison based on the `buildmer` package, we had intercepts for subjects and items (the target is an `X` or an `=`), as well as by-subject and by-item random slopes for the effect of Congruency, Condition and the 2-way validity X Congruency and congruency X Condition interactions. Even if the automatized model comparison suggest us o take the validity random slope into account, we finally drop this term given a really small variance that made problem computing the global variance of the model. Here is the formula of the model:
+
+```         
+Accuracy ~ Congruency_C*Validity_C*Condition_C +
+              (Congruency_C:Validity_C + Congruency_C*Condition_C || response_id) +
+              (Congruency_C || Target_Type)
+```
+
+See the next table for parameters of this mixed model analysis:
+
+```{r Table Accuracy_ModFinal}
+
+tab_model(Accuracy_ModFinal)
+
+```
+
+
+In the overall, the ICC (Interclass Correlation Coefficient) of this model indicate that a large part of explained variance comes from random effects (ICC = `r round((perf_Accuracy_ModFinal[1, "ICC"]*100), digits = 1)`%). In addition, the conditional R² indicate that there is `r round((perf_Accuracy_ModFinal[1, "R2_conditional"]*100), digits = 1)`% of variance explained by both fixed and random effects. The marginal R² indicate that the taken individually, the fixed effects explain `r round((perf_Accuracy_ModFinal[1, "R2_marginal"]*100), digits = 1)`% of the data variance in this model.
+
+```{r ACcuracy by validity and congruency}
+
+# Mean by Validity
+Mean_Accuracy_Validity <- df_Catego_NoNeut_Prereg_Excl_Acc_Out %>% 
+  group_by(Cueing_Validity) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)), n=length(response_id)) 
+
+# Graphic representation
+ggplot(Mean_Accuracy_Validity, aes(x = Cueing_Validity, y = Accuracy)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Accuracy - coefs_Accuracy_ModFinal["Validity_C", "Std..Error"],
+                    ymax = Accuracy + coefs_Accuracy_ModFinal["Validity_C", "Std..Error"]), width = 0.1) +
+  geom_line() +
+  xlab("Cueing_Validity") +
+  ylab("Accuracy")
+
+Mean_Accuracy_Validity <- data.frame(Mean_Accuracy_Validity, row.names = "Cueing_Validity")
+
+
+# Mean by Congruency
+Mean_Accuracy_Congruency <- df_Catego_NoNeut_Prereg_Excl_Acc_Out %>% 
+  group_by(Congruency) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)),  n=length(response_id)) 
+
+# Graphic representation
+ggplot(Mean_Accuracy_Congruency, aes(x = Congruency, y = Accuracy)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Accuracy - coefs_Accuracy_ModFinal["Congruency_C", "Std..Error"],
+                    ymax = Accuracy + coefs_Accuracy_ModFinal["Congruency_C", "Std..Error"]), width = 0.1) +
+  geom_line() +
+  xlab("Congruency") +
+  ylab("Accuracy")
+
+Mean_Accuracy_Congruency <- data.frame(Mean_Accuracy_Congruency, row.names = "Congruency")
+
+
+# Mean by Condition
+Mean_Accuracy_Condition <- df_Catego_NoNeut_Prereg_Excl_Acc_Out %>% 
+  group_by(Block) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)),  n=length(response_id)) 
+
+# Graphic representation
+ggplot(Mean_Accuracy_Condition, aes(x = Block, y = Accuracy)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Accuracy - coefs_Accuracy_ModFinal["Condition_C", "Std..Error"],
+                    ymax = Accuracy + coefs_Accuracy_ModFinal["Condition_C", "Std..Error"]), width = 0.1) +
+  geom_line() +
+  xlab("Condition") +
+  ylab("Accuracy")
+
+Mean_Accuracy_Condition <- data.frame(Mean_Accuracy_Condition, row.names = "Block")
+
+
+
+```
+
+
+According to fixed effects, P-values were obtained using the `lmerTest` package (Kuznetsova, Brockhoff, & Christensen, 2015). The analysis revealed main effects of Validity (*b* = `r round(coefs_Accuracy_ModFinal["Validity_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Validity_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Validity_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Validity_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Validity_C", "Pr...z.."]), digit = 2))))`) and congruency (*b* = `r round(coefs_Accuracy_ModFinal["Congruency_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Congruency_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Congruency_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Congruency_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Congruency_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Congruency_C", "Pr...z.."]), digit = 2))))`) on accuracy. In that way, people are more accurate in valid than invalid trials (respectively `r round((Mean_Accuracy_Validity["Valid", "Accuracy"])*100, digits = 1)`% and `r round((Mean_Accuracy_Validity["Invalid", "Accuracy"])*100, digits = 1)`%, *OR* = `r round(OR_Accuracy_ModFinal["Validity_C", "estimate"], digits = 2)`, 95% CI [`r round(OR_Accuracy_ModFinal["Validity_C", "conf.low"], digits = 2)`, `r round(OR_Accuracy_ModFinal["Validity_C", "conf.high"], digits = 2)`]) and are less accurate when the color of the cue match the color of the target in congruent trials than when these color do not match in incongruent trials (respectively `r round((Mean_Accuracy_Congruency["Congruent", "Accuracy"])*100, digits = 1)`% and `r round((Mean_Accuracy_Congruency["Incongruent", "Accuracy"])*100, digits = 1)`%, *OR* = `r round(OR_Accuracy_ModFinal["Congruency_C", "estimate"], digits = 2)`, 95% CI [`r round(OR_Accuracy_ModFinal["Congruency_C", "conf.low"], digits = 2)`, `r round(OR_Accuracy_ModFinal["Congruency_C", "conf.high"], digits = 2)`]). 
+
+```{r Accuracy No_Congruency effect, include = FALSE}
+
+df_Catego_Prereg_Excl_Acc <- df_Catego_Prereg_Excl_Acc %>%
+  mutate(NoCong_Effect = case_when(Congruency == "Congruent" ~ +0.5,
+                                   Congruency == "Incongruent" ~ +0.5,
+                                   Congruency == "NoCongruency" ~ -0.5), 
+         NoVal_Effect = case_when(Cueing_Validity == "Valid" ~ +0.5,
+                                  Cueing_Validity == "Invalid" ~ +0.5,
+                                  Cueing_Validity == "NoValidity" ~ -0.5))
+
+
+# Accuracy_NoCue <- glmer(Accuracy ~ NoCong_Effect*NoVal_Effect*Condition_C +
+#                              (NoCong_Effect*Condition_C || response_id) +
+#                              (NoCong_Effect || Target_Type),
+#                            family ="binomial",
+#                            nAGQ = 0,
+#                            data = df_Catego_Prereg_Excl_Acc)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_NoCue.RData", Accuracy_NoCue)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_NoCue.RData")
+
+summary(Accuracy_NoCue)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_NoCue <- data.frame(coef(summary(Accuracy_NoCue)))
+
+# Get odd ratios instead of fbeta for fixed effects
+OR_Accuracy_NoCue <- as.data.frame(broom.mixed::tidy(Accuracy_NoCue,conf.int=TRUE,exponentiate=TRUE,effects="fixed"))
+OR_Accuracy_NoCue <- data.frame(OR_Accuracy_NoCue, row.names = "term")
+
+
+# Mean by conguency with no-congruency trials
+Mean_Accuracy_NoCong <- df_Catego_Prereg_Excl_Acc %>% 
+  group_by(Congruency) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)), n=length(response_id))
+
+# Graphic representation
+ggplot(Mean_Accuracy_NoCong, aes(x = Congruency, y = Accuracy)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Accuracy - coefs_Accuracy_ModFinal["Congruency_C", "Std..Error"],
+                    ymax = Accuracy + coefs_Accuracy_ModFinal["Congruency_C", "Std..Error"]), width = 0.1) +
+  geom_line() +
+  xlab("Congruency") +
+  ylab("Accuracy")
+
+Mean_Accuracy_NoCong <- data.frame(Mean_Accuracy_NoCong, row.names = "Congruency")
+
+```
+
+
+An additional analysis also reveal that people tend to make less error when no cue appear before the target (`r round((Mean_Accuracy_NoCong["NoCongruency", "Accuracy"])*100, digits = 1)`%) than in the congruent or incongruent conditions (*b* = `r round(coefs_Accuracy_NoCue["NoCong_Effect", "Estimate"], digits = 2)`, *OR* = `r round(OR_Accuracy_NoCue["NoCong_Effect", "estimate"], digits = 2)`, 95% CI [`r round(OR_Accuracy_NoCue["NoCong_Effect", "conf.low"], digits = 2)`, `r round(OR_Accuracy_NoCue["NoCong_Effect", "conf.high"], digits = 2)`], 
+*Z*(`r round(get_df(Accuracy_NoCue, type = "ml1")[["NoCong_Effect"]], digit =0)`) =
+`r round(coefs_Accuracy_NoCue["NoCong_Effect", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_NoCue["NoCong_Effect", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_NoCue["NoCong_Effect", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_NoCue["NoCong_Effect", "Pr...z.."]), digit = 2))))`)
+
+
+```{r Accuracy Interaction effect, include = FALSE}
+
+# Remove neutral trials and code the Congruency variable for simple effect inspections
+df_Catego_NoNeut_Prereg_Excl_Acc_Out <- df_Catego_NoNeut_Prereg_Excl_Acc_Out %>%
+  mutate(SimpEffect_Congru = case_when(Congruency == "Congruent" ~ 0, 
+                                       Congruency == "Incongruent" ~ 1), 
+         SimpEffect_InCongru = case_when(Congruency == "Congruent" ~ 1, 
+                                         Congruency == "Incongruent" ~ 0))
+
+# Simple effect of validity in congruent trials
+
+# Accuracy_SimpEffect_Cong <- glmer(Accuracy ~ SimpEffect_Congru*Validity_C*Condition_C +
+#                                     (SimpEffect_Congru:Validity_C + SimpEffect_Congru*Condition_C || response_id) +
+#                                     (SimpEffect_Congru || Target_Type),
+#                                   family ="binomial",
+#                                   nAGQ = 0,
+#                                   data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_SimpEffect_Cong.RData", Accuracy_SimpEffect_Cong)
+
+load("Output/Models/Categorization_Task/Accuracy_SimpEffect_Cong.RData")
+summary(Accuracy_SimpEffect_Cong)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_SimpEffect_Cong <- data.frame(coef(summary(Accuracy_SimpEffect_Cong)))
+
+
+# Simple effect of validity in incongruent trials
+
+# Accuracy_SimpEffect_Incong <- glmer(Accuracy ~ SimpEffect_InCongru*Validity_C*Condition_C +
+#                                       (SimpEffect_InCongru:Validity_C + SimpEffect_InCongru*Condition_C || response_id) +
+#                                       (SimpEffect_InCongru || Target_Type),
+#                                     family ="binomial",
+#                                     nAGQ = 0,
+#                                     data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_SimpEffect_Incong.RData", Accuracy_SimpEffect_Incong)
+
+load("Output/Models/Categorization_Task/Accuracy_SimpEffect_Incong.RData")
+summary(Accuracy_SimpEffect_Incong)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_SimpEffect_Incong <- data.frame(coef(summary(Accuracy_SimpEffect_Incong)))
+
+```
+
+In addition, results show a significant interaction effect between validity and congruency (*b* = `r round(coefs_Accuracy_ModFinal["Congruency_C:Validity_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Congruency_C:Validity_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Congruency_C:Validity_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Congruency_C:Validity_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Congruency_C:Validity_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Congruency_C:Validity_C", "Pr...z.."]), digit = 2))))`). This interaction reveal that the effect of validity on accuracy is higher in congruent trials (*b* = `r round(coefs_Accuracy_SimpEffect_Cong["Validity_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_SimpEffect_Cong, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_Accuracy_SimpEffect_Cong["Validity_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_SimpEffect_Cong["Validity_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_SimpEffect_Cong["Validity_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_SimpEffect_Cong["Validity_C", "Pr...z.."]), digit = 2))))`) than in incongruent trials (*b* = `r round(coefs_Accuracy_SimpEffect_Incong["Validity_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_SimpEffect_Incong, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_Accuracy_SimpEffect_Incong["Validity_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_SimpEffect_Incong["Validity_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_SimpEffect_Incong["Validity_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_SimpEffect_Incong["Validity_C", "Pr...z.."]), digit = 2))))`). It means that when there is no match between the cue color and the target color, there is no significant accuracy difference between the valid and invalid localization of the cue. To the contrary, the validity variable have an effect on accuracy in congruent trials.
+
+
+```{r ACCuracy Contingent Capture}
+
+# Means for the contingent capture hypothesis
+Mean_Accuracy_Contingent_Capture <- df_Catego_Prereg_Excl_Acc %>% 
+  group_by(Cueing_Validity, Congruency) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)), n=length(response_id)) %>%
+  mutate(Cueing_Validity = recode(Cueing_Validity, 'NoValidity' = 'Invalid'))
+
+Mean_Accuracy_Contingent_Capture_2 <- Mean_Accuracy_Contingent_Capture %>%
+  filter(Congruency == "NoCongruency") %>%
+  mutate(Cueing_Validity = 'Valid')
+
+Mean_Accuracy_Contingent_Capture <- rbind(Mean_Accuracy_Contingent_Capture, Mean_Accuracy_Contingent_Capture_2)
+
+
+ggplot(Mean_Accuracy_Contingent_Capture, aes(x = Cueing_Validity, y = Accuracy, color = Congruency, linetype = Congruency, group = Congruency)) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = Accuracy, ymax = Accuracy), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Validity") +
+  ylab("Accuracy") +
+  scale_x_discrete(limits = c("Valid","Invalid")) +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) + 
+  scale_linetype_manual(values = c("solid", "solid", "52"))
+
+```
+
+
+
+```{r Accuracy Interaction Threat X Congruency, include = FALSE}
+
+# Code the Condition manipulation variable for simple effect inspections
+df_Catego_NoNeut_Prereg_Excl_Acc_Out <- df_Catego_NoNeut_Prereg_Excl_Acc_Out %>%
+  mutate(SimpEffect_Control = case_when(Block == "Control" ~ 0, 
+                                        Block == "Threat" ~ 1), 
+         SimpEffect_Threat = case_when(Block == "Control" ~ 1, 
+                                       Block == "Threat" ~ 0))
+
+# Simple effect of Congruency in Control block
+
+# Accuracy_SimpEffect_Ctrl <- glmer(Accuracy ~ Congruency_C*Validity_C*SimpEffect_Control +
+#                                     (Congruency_C:Validity_C + Congruency_C*SimpEffect_Control || response_id) +
+#                                     (Congruency_C || Target_Type),
+#                                   family ="binomial",
+#                                   nAGQ = 0,
+#                                   data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_SimpEffect_Ctrl.RData", Accuracy_SimpEffect_Ctrl)
+
+load("Output/Models/Categorization_Task/Accuracy_SimpEffect_Ctrl.RData")
+summary(Accuracy_SimpEffect_Ctrl)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_SimpEffect_Ctrl <- data.frame(coef(summary(Accuracy_SimpEffect_Ctrl)))
+
+
+# Simple effect of Congruency Threat block
+
+# Accuracy_SimpEffect_Threat <- glmer(Accuracy ~ Congruency_C*Validity_C*SimpEffect_Threat +
+#                                       (Congruency_C:Validity_C + Congruency_C*SimpEffect_Threat || response_id) +
+#                                       (Congruency_C || Target_Type),
+#                                     family ="binomial",
+#                                     nAGQ = 0,
+#                                     data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_SimpEffect_Threat.RData", Accuracy_SimpEffect_Threat)
+
+load("Output/Models/Categorization_Task/Accuracy_SimpEffect_Threat.RData")
+summary(Accuracy_SimpEffect_Threat)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_SimpEffect_Threat <- data.frame(coef(summary(Accuracy_SimpEffect_Threat)))
+
+```
+
+
+Regarding the effect of threat on accuracy, this analysis do not show a significant main effect of threat (*b* = `r round(coefs_Accuracy_ModFinal["Condition_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Condition_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Condition_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Condition_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Condition_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Condition_C", "Pr...z.."]), digit = 2))))`), nor a significant interaction effects with validity (*b* = `r round(coefs_Accuracy_ModFinal["Validity_C:Condition_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Validity_C:Condition_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Validity_C:Condition_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Validity_C:Condition_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Validity_C:Condition_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Validity_C:Condition_C", "Pr...z.."]), digit = 2))))`), nor a significant 3 way interaction (*b* = `r round(coefs_Accuracy_ModFinal["Congruency_C:Validity_C:Condition_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Congruency_C:Validity_C:Condition_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Congruency_C:Validity_C:Condition_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Congruency_C:Validity_C:Condition_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Congruency_C:Validity_C:Condition_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Congruency_C:Validity_C:Condition_C", "Pr...z.."]), digit = 2))))`). However, the analysis show a marginal interaction effect between congruency and condition (*b* = `r round(coefs_Accuracy_ModFinal["Congruency_C:Condition_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_ModFinal, type = "ml1")[["Congruency_C:Condition_C"]], digit =0)`) =
+`r round(coefs_Accuracy_ModFinal["Congruency_C:Condition_C", "z.value"], digits = 2)`, *p* `r ifelse((coefs_Accuracy_ModFinal["Congruency_C:Condition_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_ModFinal["Congruency_C:Condition_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_ModFinal["Congruency_C:Condition_C", "Pr...z.."]), digit = 2))))`). 
+
+Taken together, these results suggest that threat manipulation do not have an effect on participant performance in terms of accuracy. I addition, this threatening manipulation, do not lead participants to make more or less errors given the cue-validity of each trial. However, the threatening condition is associated to a congruency effect decreasing In fact, the difference in accuracy between congruent and incongruent trials tend to be **attenuated** in a threatening context (*b* =
+`r round(coefs_Accuracy_SimpEffect_Threat["Congruency_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_SimpEffect_Threat, type = "ml1")[["Congruency_C"]], digit =0)`)
+=
+`r round(coefs_Accuracy_SimpEffect_Threat["Congruency_C", "z.value"], digits = 2)`,
+*p*
+`r ifelse((coefs_Accuracy_SimpEffect_Threat["Congruency_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_SimpEffect_Threat["Congruency_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_SimpEffect_Threat["Congruency_C", "Pr...z.."]), digit = 2))))`) in comparison to a control condition (*b* =
+`r round(coefs_Accuracy_SimpEffect_Ctrl["Congruency_C", "Estimate"], digits = 2)`,
+*Z*(`r round(get_df(Accuracy_SimpEffect_Ctrl, type = "ml1")[["Congruency_C"]], digit =0)`)
+=
+`r round(coefs_Accuracy_SimpEffect_Ctrl["Congruency_C", "z.value"], digits = 2)`,
+*p*
+`r ifelse((coefs_Accuracy_SimpEffect_Ctrl["Congruency_C", "Pr...z.."])<= 0.001 ,"< 0.001", ifelse((coefs_Accuracy_SimpEffect_Ctrl["Congruency_C", "Pr...z.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_Accuracy_SimpEffect_Ctrl["Congruency_C", "Pr...z.."]), digit = 2))))`). In threatening context, people tend to use more the incongruent information in comparison to the control condition.
+
+
+Here is some interaction graph:
+
+```{r Accuracy Graph 3way Interact }
+
+# Accuracy_ModFinal_str <- glmer(Accuracy ~ Congruency*Cueing_Validity*Block +
+#                                  (Congruency:Cueing_Validity + Congruency*Block || response_id) +
+#                                  (Congruency || Target_Type),
+#                                family ="binomial",
+#                                nAGQ = 0,
+#                                data = df_Catego_NoNeut_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_str.RData", Accuracy_ModFinal_str)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_str.RData")
+
+summary(Accuracy_ModFinal_str)
+
+
+plot_model(Accuracy_ModFinal_str, type = "pred", terms = c("Congruency", "Cueing_Validity" ))
+
+
+plot_model(Accuracy_ModFinal_str, type = "int", terms = c("Block", "Cueing_Validity", "Congruency"))
+
+```
+
+The graph bellow represent accuracy in each experimental condition
+
+```{r ACcuracy Graphic representation}
+
+# Mean by condition*Congruency*Validity
+Mean_Accuracy_3way <- df_Catego_NoNeut_Prereg_Excl_Acc %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)),  n=length(response_id))
+
+
+# Graphic representation
+ggplot(Mean_Accuracy_3way, aes(x = Block, y = Accuracy, color = Congruency, linetype = Cueing_Validity, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = Accuracy , ymax = Accuracy ), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Accuracy") +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) +
+  scale_linetype_manual(values = c("solid", "52", "29"), breaks = c("Valid", "Invalid", "NoValidity"), guide = guide_legend(title = "Cueing_Validity"))
+
+
+
+# Mean by condition*Congruency*Validity including toon block and neutral trials
+Mean_Accuracy_3way_all_trials <- df_Catego_Prereg_Excl_Acc %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)),  n=length(response_id))
+
+
+# Graphic representation
+ggplot(Mean_Accuracy_3way_all_trials, aes(x = Block, y = Accuracy, color = Congruency, linetype = Cueing_Validity, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = Accuracy , ymax = Accuracy ), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Accuracy") +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) +
+  scale_linetype_manual(values = c("solid", "52", "29"), breaks = c("Valid", "Invalid", "NoValidity"), guide = guide_legend(title = "Cueing_Validity"))
+
+
+```
+
+
+Here is graphic representations of random effect adjustments (BLUPS) of this model (for participants and items respectively):
+
+```{r Accuracy BLUPS}
+
+# Plot BLUPS for each random effect
+dotplot(ranef(Accuracy_ModFinal, condVar = TRUE))
+
+# The random effect of experimental condition on accuracy by participant
+# lattice::xyplot(Accuracy ~ Condition_C | response_id, data=df_Catego, ylab="Accuracy", type=c("p","r","g"),layout = c(3,3,26))
+
+# An other graphic representation
+# languageR::xylowess.fnc(Accuracy ~ Condition_C | response_id, data = df_Catego, ylab = "Accuracy",layout = c(3,3,26))
+
+```
+
+```{r Accuracy Residual inspection, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ Accuracy | response_id, data=df_Catego, layout = c(3,3,26))
+# qqmath( ~ Accuracy | Target_Type, data=df_Catego, layout = c(1,2,1))
+
+
+qqnorm(residuals(Accuracy_ModFinal))
+qqline(residuals(Accuracy_ModFinal))
+
+#qqmath(ranef(Accuracy_ModFinal))
+
+plot(fitted(Accuracy_ModFinal),residuals(Accuracy_ModFinal))
+
+plot(Accuracy_ModFinal)
+
+hist(resid(Accuracy_ModFinal))
+
+```
+
+**I need to check for assumptions in this analysis**
+Finally, Visual inspection of residual plots did not reveal any obvious deviations from homoscedasticity or normality.
+
+
+
+#### Additional analysis
+
+##### Model with random correlations
+```{r Acuracy - With random correlations, eval = FALSE}
+
+# The Final model but which take into account correlations between random effects
+
+load("Output/Models/Categorization_Task/Accuracy_ModFinal_WithCorr.RData")
+
+# Accuracy_ModFinal_WithCorr <- glmer(Accuracy ~ Congruency_C*Validity_C*Condition_C +
+#                                       (Congruency_C:Validity_C + Congruency_C*Condition_C | response_id) +
+#                                       (Congruency_C | Target_Type),
+#                                     family ="binomial",
+#                                     nAGQ = 0,
+#                                     data = df_Catego)
+
+# save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_WithCorr.RData", Accuracy_ModFinal_WithCorr)
+
+summary(Accuracy_ModFinal_WithCorr)
+
+Comp_Model_Corr_Acc <- anova(Accuracy_ModFinal_NoCorr, Accuracy_ModFinal_WithCorr)
+
+# These correlations between random factors significantly improve the model but is less parsimonious given the low increasing in explained variance
+
+```
+
+## Accuracy: Sounds Comparison (Toon VS Threat)
+
+In these analyses, we test if there is a significant difference between the effect of screams and vocalizations on response time.
+
+```{r Accuracy ComparisonSounds}
+
+# Build a dataframe without the toon condition and without no-congruency trials
+df_Catego_NoCtrl <- df_Catego %>%
+  filter(Congruency != "NoCongruency") %>%
+  filter(Block != "Control") %>%
+  
+  mutate(Sound_Type = case_when(Block == "Toon" ~ -0.5,
+                                Block == "Threat" ~ +0.5)) %>%
+  mutate(Sound_Type_str = case_when(Block == "Toon" ~ "Vocalization",
+                                Block == "Threat" ~ "Scream"))
+
+
+df_Catego_NoCtrl_Prereg_Excl_Acc <- df_Catego_NoCtrl %>%
+  filter(Response_Status != 3) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+
+# Accuracy_ModFinal_SoundComp_Prereg_Excl <- glmer(Accuracy ~ Congruency_C*Validity_C*Sound_Type +
+#                                          (Congruency_C:Validity_C + Congruency_C*Sound_Type || response_id) +
+#                                          (Congruency_C || Target_Type),
+#                                        family ="binomial",
+#                                        nAGQ = 0,
+#                                        data = df_Catego_NoCtrl_Prereg_Excl_Acc)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp_Prereg_Excl.RData", Accuracy_ModFinal_SoundComp_Prereg_Excl)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp_Prereg_Excl.RData")
+
+summary(Accuracy_ModFinal_SoundComp_Prereg_Excl)
+#performance::model_performance(Accuracy_ModFinal_SoundComp_Prereg_Excl)
+
+
+```
+
+### Outlier exclusion
+
+```{r Accuracy Outlier-ThTo}
+
+df_Catego_NoCtrl_Prereg_Excl_Acc <- df_Catego_NoCtrl_Prereg_Excl_Acc %>%
+  mutate(Hat_Acc_1 = hatvalues(Accuracy_ModFinal_SoundComp_Prereg_Excl)) %>%
+  mutate(Rstud_Acc_1 = rstudent(Accuracy_ModFinal_SoundComp_Prereg_Excl))%>%
+  mutate(Cook_Acc_1 = cooks.distance(Accuracy_ModFinal_SoundComp_Prereg_Excl))
+
+
+df_Catego_NoCtrl_Prereg_Excl_Acc_Out <- df_Catego_NoCtrl_Prereg_Excl_Acc %>%
+  filter(Rstud_Acc_1 <= 3 & Rstud_Acc_1 >= -3) %>%
+  filter(Hat_Acc_1 <= .38) %>%
+  filter(Cook_Acc_1 <= 1.00)
+
+# Accuracy_ModFinal_SoundComp <- glmer(Accuracy ~ Congruency_C*Validity_C*Sound_Type +
+#                              (Congruency_C:Validity_C + Congruency_C*Sound_Type || response_id) +
+#                              (Congruency_C || Target_Type),
+#                            family ="binomial",
+#                            nAGQ = 0,
+#                            data = df_Catego_NoCtrl_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp.RData", Accuracy_ModFinal_SoundComp)
+
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp.RData")
+
+summary(Accuracy_ModFinal_SoundComp)
+#performance::model_performance(Accuracy_ModFinal_SoundComp)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_ModFinal_SoundComp <- data.frame(coef(summary(Accuracy_ModFinal_SoundComp)))
+
+# Get parameters for model' fixed effects
+effects_Accuracy_ModFinal_SoundComp <- broom.mixed::tidy(Accuracy_ModFinal_SoundComp)
+
+# Get odd ratios instead of fbeta for fixed effects
+OR_Accuracy_ModFinal_SoundComp <- as.data.frame(broom.mixed::tidy(Accuracy_ModFinal_SoundComp,conf.int=TRUE,exponentiate=TRUE,effects="fixed"))
+OR_Accuracy_ModFinal_SoundComp <- data.frame(OR_Accuracy_ModFinal_SoundComp, row.names = "term")
+
+# Calculate the overall model performance
+#perf_Accuracy_ModFinal_SoundComp <- performance::model_performance(Accuracy_ModFinal_SoundComp)
+
+# # To extract fixed effects
+# fixef(Accuracy_ModFinal_ThTo)
+
+
+```
+
+
+### Graphic representation
+
+```{r Accuracy Graph 3way Interact-ThTo }
+
+Accuracy_ModFinal_SoundComp_str <- glmer(Accuracy ~ Congruency*Cueing_Validity*Sound_Type_str +
+                                 (Congruency:Cueing_Validity + Congruency*Sound_Type_str || response_id) +
+                                 (Congruency || Target_Type),
+                               family ="binomial",
+                               nAGQ = 0,
+                               data = df_Catego_NoCtrl_Prereg_Excl_Acc_Out)
+
+# # Save the model
+ save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp_str.RData", Accuracy_ModFinal_SoundComp_str)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_SoundComp_str.RData")
+
+summary(Accuracy_ModFinal_SoundComp_str)
+
+
+plot_model(Accuracy_ModFinal_SoundComp_str, type = "pred", terms = c("Congruency", "Cueing_Validity" ))
+
+
+plot_model(Accuracy_ModFinal_SoundComp_str, type = "int", terms = c("Sound_Type_str", "Cueing_Validity", "Congruency"))
+
+```
+
+
+
+
+## Accuracy: Exploratory
+
+
+Given that the Threat and the Toon block show similar results, we combine here these two blocks and analyse their effect against the control Block. This analysis contradict our pre-registration in which we made the hypothesis than the Toon block should have the same effect than the control block. 
+
+```{r Accuracy Combine Toon&Threat-ThTo}
+
+df_Catego_ThTo_Prereg_Excl_Acc <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate))) %>%
+  
+  mutate(Sounds_Presence_C = case_when(Block == "Control" ~ -0.5,
+                                 Block == "Threat" ~ +0.5,
+                                 Block == "Toon" ~ +0.5))%>%
+
+  mutate(Sounds_Presence_str = case_when(Block == "Control" ~ "Without_Sound",
+                                 Block == "Threat" ~ "With_Sound",
+                                 Block == "Toon" ~ "With_Sound")) %>%
+  
+  filter(Congruency != "NoCongruency")
+
+
+# Accuracy_ModFinal_ThTo_Prereg_Excl <- glmer(Accuracy ~ Congruency_C*Validity_C*Sounds_Presence_C +
+#                                          (Congruency_C:Validity_C + Congruency_C*Sounds_Presence_C || response_id) +
+#                                          (Congruency_C || Target_Type),
+#                                        family ="binomial",
+#                                        nAGQ = 0,
+#                                        data = df_Catego_ThTo_Prereg_Excl_Acc)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo_Prereg_Excl.RData", Accuracy_ModFinal_ThTo_Prereg_Excl)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo_Prereg_Excl.RData")
+
+summary(Accuracy_ModFinal_ThTo_Prereg_Excl)
+#performance::model_performance(Accuracy_ModFinal_ThTo_Prereg_Excl)
+
+
+```
+
+### Outlier exclusion
+
+```{r Accuracy Outlier-ThTo}
+
+df_Catego_ThTo_Prereg_Excl_Acc <- df_Catego_ThTo_Prereg_Excl_Acc %>%
+  mutate(Hat_Acc_1 = hatvalues(Accuracy_ModFinal_ThTo_Prereg_Excl)) %>%
+  mutate(Rstud_Acc_1 = rstudent(Accuracy_ModFinal_ThTo_Prereg_Excl))%>%
+  mutate(Cook_Acc_1 = cooks.distance(Accuracy_ModFinal_ThTo_Prereg_Excl))
+
+
+df_Catego_ThTo_Prereg_Excl_Acc_Out <- df_Catego_ThTo_Prereg_Excl_Acc %>%
+  filter(Rstud_Acc_1 <= 3 & Rstud_Acc_1 >= -3) %>%
+  filter(Hat_Acc_1 <= .35) %>%
+  filter(Cook_Acc_1 <= .70)
+
+# Accuracy_ModFinal_ThTo <- glmer(Accuracy ~ Congruency_C*Validity_C*Sounds_Presence_C +
+#                              (Congruency_C:Validity_C + Congruency_C*Sounds_Presence_C || response_id) +
+#                              (Congruency_C || Target_Type),
+#                            family ="binomial",
+#                            nAGQ = 0,
+#                            data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo.RData", Accuracy_ModFinal_ThTo)
+
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo.RData")
+
+summary(Accuracy_ModFinal_ThTo)
+#performance::model_performance(Accuracy_ModFinal_ThTo)
+
+# Save the fixed and random effects for result reporting
+coefs_Accuracy_ModFinal_ThTo <- data.frame(coef(summary(Accuracy_ModFinal_ThTo)))
+
+# Get parameters for model' fixed effects
+effects_Accuracy_ModFinal_ThTo <- broom.mixed::tidy(Accuracy_ModFinal_ThTo)
+
+# Get odd ratios instead of fbeta for fixed effects
+OR_Accuracy_ModFinal_ThTo <- as.data.frame(broom.mixed::tidy(Accuracy_ModFinal_ThTo,conf.int=TRUE,exponentiate=TRUE,effects="fixed"))
+OR_Accuracy_ModFinal_ThTo <- data.frame(OR_Accuracy_ModFinal_ThTo, row.names = "term")
+
+# Calculate the overall model performance
+# perf_Accuracy_ModFinal_ThTo <- performance::model_performance(Accuracy_ModFinal_ThTo)
+
+# # To extract fixed effects
+# fixef(Accuracy_ModFinal_ThTo)
+
+
+```
+
+
+### Graphic representation
+
+```{r Accuracy Graph 3way Interact-ThTo }
+
+# Accuracy_ModFinal_ThTo_str <- glmer(Accuracy ~ Congruency*Cueing_Validity*Sounds_Presence_str +
+#                                  (Congruency:Cueing_Validity + Congruency*Sounds_Presence_str || response_id) +
+#                                  (Congruency || Target_Type),
+#                                family ="binomial",
+#                                nAGQ = 0,
+#                                data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+#  save(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo_str.RData", Accuracy_ModFinal_ThTo_str)
+
+load(file = "Output/Models/Categorization_Task/Accuracy_ModFinal_ThTo_str.RData")
+
+summary(Accuracy_ModFinal_ThTo_str)
+
+
+plot_model(Accuracy_ModFinal_ThTo_str, type = "pred", terms = c("Congruency", "Cueing_Validity" ))
+
+
+plot_model(Accuracy_ModFinal_ThTo_str, type = "int", terms = c("Sounds_Presence_str", "Cueing_Validity", "Congruency"))
+
+```
+
+
+### Simple effects 
+
+```{r SimpleEffect-Acc-ThTo}
+
+# Remove neutral trials and code the Congruency variable for simple effect inspections
+df_Catego_ThTo_Prereg_Excl_Acc_Out <- df_Catego_ThTo_Prereg_Excl_Acc_Out %>%
+  mutate(SimpEffect_Congru = case_when(Congruency == "Congruent" ~ 0, 
+                                       Congruency == "Incongruent" ~ 1), 
+         SimpEffect_InCongru = case_when(Congruency == "Congruent" ~ 1, 
+                                         Congruency == "Incongruent" ~ 0)) %>%
+  
+  mutate(SimpEffect_Sound = case_when(Sounds_Presence_str == "With_Sound" ~ 0, 
+                                      Sounds_Presence_str == "Without_Sound" ~ 1), 
+         SimpEffect_NoSound = case_when(Sounds_Presence_str == "With_Sound" ~ 1, 
+                                        Sounds_Presence_str == "Without_Sound" ~ 0))
+
+
+#########################################################
+
+## Simple effect of the Contingent capture effect
+
+### Contingent capture effect when participants hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_Sound <- glmer(Accuracy ~ Congruency_C*Validity_C*SimpEffect_Sound +
+#                                               (Congruency_C:Validity_C + Congruency_C*SimpEffect_Sound || response_id) +
+#                                               (Congruency_C || Target_Type),
+#                                             family ="binomial",
+#                                             nAGQ = 0,
+#                                             data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Sound.RData", Acc_ModFinal_ThTo_SimpEffect_Sound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Sound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Sound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Sound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Sound)))
+
+### Simple effect of validity in congruent trials when participants do not hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_NoSound <- glmer(Accuracy ~ Congruency_C*Validity_C*SimpEffect_NoSound +
+#                                                 (Congruency_C:Validity_C + Congruency_C*SimpEffect_NoSound || response_id) +
+#                                                 (Congruency_C || Target_Type),
+#                                               family ="binomial",
+#                                               nAGQ = 0,
+#                                               data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_NoSound.RData", Acc_ModFinal_ThTo_SimpEffect_NoSound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_NoSound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_NoSound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_NoSound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_NoSound)))
+
+
+#########################################################
+#########################################################
+
+## Simple effect of congruency
+
+### Effects in Congruent trials
+
+# Acc_ModFinal_ThTo_SimpEffect_Congru <- glmer(Accuracy ~ SimpEffect_Congru*Validity_C*Sounds_Presence_C +
+#                                               (SimpEffect_Congru:Validity_C + SimpEffect_Congru*Sounds_Presence_C || response_id) +
+#                                               (SimpEffect_Congru || Target_Type),
+#                                             family ="binomial",
+#                                             nAGQ = 0,
+#                                             data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Congru.RData", Acc_ModFinal_ThTo_SimpEffect_Congru)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Congru.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Congru)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Congru <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Congru)))
+
+### Effects in Incongruent trials
+
+# Acc_ModFinal_ThTo_SimpEffect_Incongru <- glmer(Accuracy ~ Congruency_C*Validity_C*Sounds_Presence_C +
+#                                                 (Congruency_C:Validity_C + Congruency_C*Sounds_Presence_C || response_id) +
+#                                                 (Congruency_C || Target_Type),
+#                                               family ="binomial",
+#                                               nAGQ = 0,
+#                                               data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incongru.RData", Acc_ModFinal_ThTo_SimpEffect_Incongru)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incongru.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Incongru)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Incongru <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Incongru)))
+
+
+#########################################################
+#########################################################
+
+# Decompose the 3 way interaction
+
+#########################################################
+#########################################################
+
+# Congruent trials
+
+# Simple effect of validity in congruent trials when participants hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_Cong_Sound <- glmer(Accuracy ~ SimpEffect_Congru*Validity_C*SimpEffect_Sound +
+#                                                    (SimpEffect_Congru:Validity_C + SimpEffect_Congru*SimpEffect_Sound || response_id) +
+#                                                    (SimpEffect_Congru || Target_Type),
+#                                                  family ="binomial",
+#                                                  nAGQ = 0,
+#                                                  data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Cong_Sound.RData", Acc_ModFinal_ThTo_SimpEffect_Cong_Sound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Cong_Sound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Cong_Sound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Cong_Sound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Cong_Sound)))
+
+
+# Simple effect of validity in congruent trials when participants do not hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound <- glmer(Accuracy ~ SimpEffect_Congru*Validity_C*SimpEffect_NoSound +
+#                                                      (SimpEffect_Congru:Validity_C + SimpEffect_Congru*SimpEffect_NoSound || response_id) +
+#                                                      (SimpEffect_Congru || Target_Type),
+#                                                    family ="binomial",
+#                                                    nAGQ = 0,
+#                                                    data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound.RData", Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Cong_NoSound)))
+
+
+
+#########################################################
+
+# Incongruent trials
+
+# Simple effect of validity in incongruent trials when participants hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_Incong_Sound <- glmer(Accuracy ~ SimpEffect_InCongru*Validity_C*SimpEffect_Sound +
+#                                                      (SimpEffect_InCongru:Validity_C + SimpEffect_InCongru*SimpEffect_Sound || response_id) +
+#                                                      (SimpEffect_InCongru || Target_Type),
+#                                                    family ="binomial",
+#                                                    nAGQ = 0,
+#                                                    data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incong_Sound.RData", Acc_ModFinal_ThTo_SimpEffect_Incong_Sound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incong_Sound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Incong_Sound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Incong_Sound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Incong_Sound)))
+
+
+# Simple effect of validity in incongruent trials when participants do not hear sounds
+
+# Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound <- glmer(Accuracy ~ SimpEffect_InCongru*Validity_C*SimpEffect_NoSound +
+#                                                        (SimpEffect_InCongru:Validity_C + SimpEffect_InCongru*SimpEffect_NoSound || response_id) +
+#                                                        (SimpEffect_InCongru || Target_Type),
+#                                                      family ="binomial",
+#                                                      nAGQ = 0,
+#                                                      data = df_Catego_ThTo_Prereg_Excl_Acc_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound.RData", Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound)
+
+load("Output/Models/Categorization_Task/Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound.RData")
+
+summary(Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound)
+coefs_Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound <- data.frame(coef(summary(Acc_ModFinal_ThTo_SimpEffect_Incong_NoSound)))
+
+
+```
+
+
+## Accuracy : Self reported anxiety effect
+
+### Preregistration exclusion criterion
+
+
+```{r Acc Anxiety effect-ThTo - Prereg}
+
+df_Catego <- df_Catego %>%
+  mutate(Evol_Anxiety_Bart = (Fear_Score - Fear_Score_Pretest),
+         Evol_Anxiety_Mean = (Fear_Mean - Fear_Mean_Pretest)) %>%
+  mutate(Threat_Scream_Tot = rowMeans(select(df_Catego,c(Threat_Scream1, Threat_Scream2))),
+         Threat_Vocal_Tot = rowMeans(select(df_Catego,c(Threat_Vocal1, Threat_Vocal2)))) %>%
+  
+  mutate(Threat_by_sounds = (Threat_Scream1 - Threat_Vocal1), 
+         Concerned_by_sounds = (Threat_Scream2 - Threat_Vocal2)) %>%
+  
+  mutate(Threat_Scream_Mean = rowMeans(select(df_Catego,c(Threat_Scream1, Threat_Scream2))), 
+         Threat_Vocal_Mean = rowMeans(select(df_Catego,c(Threat_Vocal1, Threat_Vocal2)))) %>%
+  
+  mutate(Threat_Sounds_Mean = (Threat_Scream_Mean - Threat_Vocal_Mean)) 
+
+
+
+df_Catego_Anxiety_ThTo_Prereg_Excl_Acc <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate))) %>%
+  
+  mutate(Sounds_Presence_C = case_when(Block == "Control" ~ -0.5,
+                                 Block == "Threat" ~ +0.5,
+                                 Block == "Toon" ~ +0.5))%>%
+
+  mutate(Sounds_Presence_str = case_when(Block == "Control" ~ "Without_Sound",
+                                 Block == "Threat" ~ "With_Sound",
+                                 Block == "Toon" ~ "With_Sound")) %>%
+  
+  filter(Congruency != "NoCongruency")
+
+
+Acc_Anxiety_1_Catego <- 
+  glmer(Accuracy ~ Congruency_C*Validity_C*Evol_Anxiety_Mean +
+          (Congruency_C:Validity_C + Congruency_C*Evol_Anxiety_Mean || response_id) +
+          (Congruency_C || Target_Type),
+        family ="binomial",
+        nAGQ = 0,
+        data = df_Catego_Anxiety_ThTo_Prereg_Excl_Acc)
+
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/Acc_Anxiety_1_Catego.RData", Acc_Anxiety_1_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/Acc_Anxiety_1_Catego.RData")
+
+summary(Acc_Anxiety_1_Catego)
+#performance::model_performance(Acc_Anxiety_1_Catego)
+
+```
+
+#### Outlier exclusion
+
+
+```{r Acc Anxiety effect outlier exclusion}
+
+df_Catego_Anxiety_ThTo_Prereg_Excl_Acc <- df_Catego_Anxiety_ThTo_Prereg_Excl_Acc %>%
+  mutate(Hat_Anxiety_1 = hatvalues(Acc_Anxiety_1_Catego)) %>%
+  mutate(Rstud_Anxiety_1 = rstudent(Acc_Anxiety_1_Catego))%>%
+  mutate(Cook_Anxiety_1 = cooks.distance(Acc_Anxiety_1_Catego))
+
+
+df_Catego_Anxiety_ThTo_Prereg_Excl_Acc_Out <- df_Catego_Anxiety_ThTo_Prereg_Excl_Acc %>%
+  filter(Rstud_Anxiety_1 <= 3 & Rstud_Anxiety_1 >= -3) %>%
+  filter(Hat_Anxiety_1 <= .40) %>%
+  filter(Cook_Anxiety_1 <= .90)
+
+
+Acc_Anxiety_01_Catego <- 
+  glmer(Accuracy ~ Congruency_C*Validity_C*Evol_Anxiety_Mean +
+          (Congruency_C:Validity_C + Congruency_C*Evol_Anxiety_Mean || response_id) +
+          (Congruency_C || Target_Type),
+        family ="binomial",
+        nAGQ = 0,
+        data = df_Catego_Anxiety_ThTo_Prereg_Excl_Acc_Out)
+
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/Acc_Anxiety_01_Catego.RData", Acc_Anxiety_01_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/Acc_Anxiety_01_Catego.RData")
+
+summary(Acc_Anxiety_01_Catego)
+# performance::model_performance(Acc_Anxiety_01_Catego)
+
+
+```
+
+#### Covariates 
+
+```{r Acc Anxiety effect outlier exclusion Covariates}
+
+Acc_Anxiety_01_cov_Catego <- 
+  glmer(Accuracy ~ Congruency_C*Validity_C*Evol_Anxiety_Mean +
+          PTSD_Score +  Threat_Sounds_Mean  + 
+          (Congruency_C:Validity_C + Congruency_C*Evol_Anxiety_Mean || response_id) +
+          (Congruency_C || Target_Type),
+        family ="binomial",
+        nAGQ = 0,
+        data = df_Catego_Anxiety_ThTo_Prereg_Excl_Acc_Out)
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/Acc_Anxiety_01_cov_Catego.RData", Acc_Anxiety_01_cov_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/Acc_Anxiety_01_cov_Catego.RData")
+
+summary(Acc_Anxiety_01_cov_Catego)
+#performance::model_performance(Acc_Anxiety_01_cov_Catego)
+
+# Save the fixed and random effects for result reporting
+coefs_Acc_Anxiety_01_cov_Catego <- data.frame(coef(summary(Acc_Anxiety_01_cov_Catego)))
+
+# Get parameters for model' fixed effects
+effects_Acc_Anxiety_01_cov_Catego <- broom.mixed::tidy(Acc_Anxiety_01_cov_Catego)
+
+# Get odd ratios instead of fbeta for fixed effects
+OR_Acc_Anxiety_01_cov_Catego <- as.data.frame(broom.mixed::tidy(Acc_Anxiety_01_cov_Catego,conf.int=TRUE,exponentiate=TRUE,effects="fixed"))
+OR_Acc_Anxiety_01_cov_Catego <- data.frame(OR_Acc_Anxiety_01_cov_Catego, row.names = "term")
+
+# Calculate the overall model performance
+#perf_Acc_Anxiety_01_cov_Catego <- performance::model_performance(Acc_Anxiety_01_cov_Catego)
+
+# # To extract fixed effects
+# fixef(Acc_Anxiety_01_cov_Catego)
+
+```
+
+
+
+
+## Response times
+
+### Effect of threat on response times
+
+#### Model comparison to predict response time
+
+```{r RT mixed model, eval = FALSE}
+
+# Find the best model to fit the data. Only random effect terms are compared since the fixed 3-way interaction is our hypothesis
+
+RT_lmer_MaxMod <- buildmer(RT ~ Congruency_C * Validity_C * Condition_C +
+                             (Congruency_C*Validity_C*Condition_C|| response_id) +
+                             (Congruency_C*Validity_C*Condition_C|| Target_Type),
+                           data = df_Catego, 
+                           buildmerControl = buildmerControl(include = ~ Congruency_C * Validity_C * Condition_C, 
+                                                             family = gaussian(),
+                                                             calc.anova = TRUE, 
+                                                             calc.summary = TRUE, 
+                                                             ddf = "Satterthwaite"))
+
+# Save the model
+# save(file = "Output/Models/Categorization_Task/RT_lmer_MaxMod.RData", RT_lmer_MaxMod)
+
+load("Output/Models/Categorization_Task/RT_lmer_MaxMod.RData")
+# Summarise the choosen model
+summary(RT_lmer_MaxMod)
+
+# Give the fomula of the choosen model
+formula(RT_lmer_MaxMod)
+
+############################################
+
+# The same model which include correlations between random effects
+
+RT_lmer_MaxMod_WithCorr <- buildmer(RT ~ Congruency_C * Validity_C * Condition_C +
+                                      (Congruency_C*Validity_C*Condition_C| response_id) +
+                                      (Congruency_C*Validity_C*Condition_C| Target_Type),
+                                    data = df_Catego, 
+                                    buildmerControl = buildmerControl(include = ~ Congruency_C * Validity_C * Condition_C, 
+                                                                      family = gaussian(),
+                                                                      calc.anova = TRUE, 
+                                                                      calc.summary = TRUE, 
+                                                                      ddf = "Satterthwaite"))
+
+# Save the model
+# save(file = "Output/Models/Categorization_Task/RT_lmer_MaxMod_WithCorr.RData", RT_lmer_MaxMod_WithCorr)
+
+load("Output/Models/Categorization_Task/RT_lmer_MaxMod_WithCorr.RData")
+# Summarise the choosen model
+summary(RT_lmer_MaxMod_WithCorr)
+
+# Give the fomula of the choosen model
+formula(RT_lmer_MaxMod_WithCorr)
+
+
+### Even if we use an automatized comparison model algorithm, we choose to also run a brief stepwise model comparison (to see if other random factors should be include to the final model)
+
+RT_ModComp00 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Congruency_C*Validity_C*Condition_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp00.RData", RT_ModComp00)
+
+RT_ModComp01 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Congruency_C*Validity_C + Congruency_C*Condition_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp01.RData", RT_ModComp01)
+
+RT_ModComp02 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Congruency_C*Validity_C + Condition_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp02.RData", RT_ModComp02)
+
+RT_ModComp03 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Congruency_C + Validity_C + Condition_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp03.RData", RT_ModComp03)
+
+RT_ModComp04 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Condition_C + Congruency_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp04.RData", RT_ModComp04)
+
+RT_ModComp05 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Condition_C || response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp05.RData", RT_ModComp05)
+
+Comp_Model_1 <- anova(RT_ModComp00, RT_ModComp01, RT_ModComp02, RT_ModComp03, RT_ModComp04, RT_ModComp05)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/Catego_Comp_Model_1.RData", Comp_Model_1)
+
+# Contrary to the automatized selection, the model which significantly better explain the data is the model with the random factors: (Congruency_C*Validity_C + Condition_C || response_id)
+
+
+# Model comparison with correlations between random factors
+
+RT_ModComp04_Corr <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Condition_C + Congruency_C | response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp04_Corr.RData", RT_ModComp04_Corr)
+
+
+Comp_Model_2 <- anova(RT_ModComp04, RT_ModComp04_Corr)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/Catego_Comp_Model_2.RData", Comp_Model_2)
+
+## With the model proposed by the automatized selection, correlations betwwen random factors do not significantly improve the model
+
+
+RT_ModComp02_Corr <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                           (Congruency_C*Validity_C + Condition_C | response_id),
+                         data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp02_Corr.RData", RT_ModComp02_Corr)
+
+Comp_Model_3 <- anova(RT_ModComp02, RT_ModComp02_Corr)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/Catego_Comp_Model_3.RData", Comp_Model_3)
+
+# With the selected model from the stepwise selection, taking into account correlations between random factors significantly improve the model. However, given that this increasing is small even with lots of parameters, we choose to select the model without correlations since it's a more parsimonious model.
+
+
+RT_ModComp02_Item <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                             (Congruency_C*Validity_C + Condition_C || response_id)+
+                             (1|Target_Type),
+                           data = df_Catego)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/RT_ModComp02_Item.RData", RT_ModComp02_Item)
+
+Comp_Model_4 <- anova(RT_ModComp02, RT_ModComp02_Item)
+save(file = "Output/Models/Categorization_Task/Stepwise_model_comparison/Catego_Comp_Model_4.RData", Comp_Model_4)
+
+VarCorr(RT_ModComp02_Item)
+summary(rePCA(RT_ModComp02_Item))
+
+
+# Even if taking into account the random intercept of Target_Type (the target is an X or =) significantly improve the model, we choose to not take this variable into account in the random effects of the final model since the variance explained by this variable is very low in comparison to other random effects.
+
+
+#####################################
+#####################################
+
+#### The final Model for RT
+
+
+# Build the mixed model based on the best model after the model comparison
+RT_ModFinal_1 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C + 
+                      (Congruency_C*Validity_C + Condition_C || response_id),
+                    data = df_Catego)
+
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/RT_ModFinal_1.RData", RT_ModFinal_1)
+
+# Summarise the  model
+summary(RT_ModFinal_1)
+
+formula_RT_ModFinal_1 <- formula(RT_ModFinal_1)
+
+# Give the variance terms of the model
+VarCorr(RT_ModFinal_1)
+summary(rePCA(RT_ModFinal_1))
+
+
+```
+
+The final model we use to predict RT is: 
+
+```
+RT ~ Congruency_C*Validity_C*Condition_C + 
+     (Congruency_C*Validity_C + Condition_C || response_id)
+```
+
+
+#### Main analysis
+
+
+```{r Neutral dataframe RT, include=FALSE}
+
+# Build a dataframe without the toon condition and without no-congruency trials
+df_Catego_NoNeut <- df_Catego %>%
+  filter(Congruency != "NoCongruency") %>%
+  filter(Block != "Toon")
+
+warning("In the 'df_Catego_NoNeut' dataframe, we removed trials of the toon block and no-congruency/no-validity trials")
+
+
+# Build a dataframe WITH the toon condition and WITH no-congruency trials but which respect preregistration exclusion criterion
+df_Catego_Prereg_Excl <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter(Response_Status != 2) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+```
+
+
+##### No data transformation/exclusion
+
+Here, we run analysis on the whole dataframe. It implies that we do not remove rows of incorrect responses, no answer (RT > 1500ms), participants with abnormal error rates, RT higher or lower than 3 MAD than the median of Rt in the whole sample, trials preceded by a sound
+
+###### RT prediction
+```{r RT effect no data exclusion}
+
+# RT_ModFinal_1 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C +
+#                         (Congruency_C*Validity_C + Condition_C || response_id),
+#                       data = df_Catego_NoNeut)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_1.RData", RT_ModFinal_1)
+
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_1.RData")
+
+summary(RT_ModFinal_1)
+performance::model_performance(RT_ModFinal_1)
+
+
+```
+
+##### Visual inspection of residuals
+```{r RT inspection, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ RT | response_id, data=df_Catego, layout = c(3,3,26))
+# qqmath( ~ RT | Target_Type, data=df_Catego, layout = c(1,2,1))
+
+
+qqnorm(residuals(RT_ModFinal_1))
+qqline(residuals(RT_ModFinal_1))
+
+hist(resid(RT_ModFinal_1))
+plot(density(residuals(RT_ModFinal_1)))
+
+
+plot(fitted(RT_ModFinal_1),residuals(RT_ModFinal_1))
+plot(RT_ModFinal_1)
+
+
+```
+
+The mixed effect model which predict RT on the whole data frame do not respect normality of residuals since the visual inspection of qq-plot show a S-Curve. In addition, Homoscedasticity is not respected when we look at the plot which associate residuals to fitted values. It means hat the variance or residuals are not independents. 
+
+
+##### Data transformation/exclusion based on preregistration
+
+Here, we apply the mixed effect model to predict RT after the exclusion of participants and rows based on or preregistration: 
+    - Incorrect responses
+    - No response before the end of trial (>1500ms)
+    - RT > 3MAD or RT < 3MAD
+    - Participants with an accuracy rate < 3MAD (Accuracy rate < `r round(median(df_Catego$Accuracy_Rate)-3*mad(df_Catego$Accuracy_Rate), digit = 2)`)
+
+###### RT Prediction
+```{r RT Prereg exclusion}
+
+df_Catego_NoNeut_Prereg_Excl <- df_Catego_NoNeut %>%
+  filter(Response_Status != 3) %>%
+  filter(Response_Status != 2) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+
+# RT_ModFinal_2 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C +
+#                                   (Congruency_C*Validity_C + Condition_C || response_id),
+#                                 data = df_Catego_NoNeut_Prereg_Excl)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_2.RData", RT_ModFinal_2)
+
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_2.RData")
+
+summary(RT_ModFinal_2)
+performance::model_performance(RT_ModFinal_2)
+
+```
+
+##### Visual inspection of residuals
+```{r RT Prereg exclusion Residual inspection, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ RT | response_id, data=df_Catego_Prereg_Excl, layout = c(3,3,26))
+# qqmath( ~ RT | Target_Type, data=df_Catego_Prereg_Excl, layout = c(1,2,1))
+
+
+qqnorm(residuals(RT_ModFinal_2))
+qqline(residuals(RT_ModFinal_2))
+
+hist(resid(RT_ModFinal_2))
+plot(density(residuals(RT_ModFinal_2)))
+
+
+plot(fitted(RT_ModFinal_2),residuals(RT_ModFinal_2))
+plot(RT_ModFinal_2)
+
+
+```
+
+Visual inspection of residuals tend to correct a bit the problem of non-normality of residuals that we find in the model which use the whole dataframe. After application of exclusion criterion based on our pre-regitration, the normality problem tend to be partially resolved. However, it seems that a homoscedasticity problem persist in this model. In order to resolve this problem, according to our pre-registration, we re-run the same model after exclusion of deviant values (Studentized residuals, hat values, cook distance)
+
+
+##### Outliers exclusion
+
+Here, we remove trials reflecting outliers in terms of Studentized residuals, hat values and cook distance. For that we removed rows with : 
+    - Studentized residuals > 3 or Studentized residuals < -3
+    - Hat values > .020 (its a relative threshold based on histogram and visual inspection of these values)
+    - Cook distance > .020 (its a relative threshold based on histogram and visual inspection of these values)
+    
+
+###### RT Prediction
+```{r RT outliers}
+
+df_Catego_NoNeut_Prereg_Excl <- df_Catego_NoNeut_Prereg_Excl %>%
+  mutate(Hat_RT_2 = hatvalues(RT_ModFinal_2)) %>%
+  mutate(Rstud_RT_2 = rstudent(RT_ModFinal_2))%>%
+  mutate(Cook_RT_2 = cooks.distance(RT_ModFinal_2))
+
+
+df_Catego_NoNeut_Prereg_Excl_RT_Out <- df_Catego_NoNeut_Prereg_Excl %>%
+  filter(Rstud_RT_2 <= 3 & Rstud_RT_2 >= -3) %>%
+  filter(Hat_RT_2 <= .030) %>%
+  filter(Cook_RT_2 <= .032)
+
+
+# RT_ModFinal_02 <- lmer(RT ~ Congruency_C*Validity_C*Condition_C +
+#                                   (Congruency_C*Validity_C + Condition_C || response_id),
+#                                 data = df_Catego_NoNeut_Prereg_Excl_RT_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_02.RData", RT_ModFinal_02)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_02.RData")
+
+summary(RT_ModFinal_02)
+performance::model_performance(RT_ModFinal_02)
+
+
+# Save the fixed and random effects for result reporting
+coefs_RT_ModFinal_02 <- data.frame(coef(summary(RT_ModFinal_02)))
+
+# Get parameters for model' fixed effects
+effects_RT_ModFinal_02 <- broom.mixed::tidy(RT_ModFinal_02)
+
+# Calculate the overall model performance
+perf_RT_ModFinal_02 <- performance::model_performance(RT_ModFinal_02)
+
+# # To extract fixed effects
+#fixef(RT_ModFinal_02)
+
+```
+
+##### Equivalence Testing
+
+Formula to calculate Cohen's d effect size : 
+
+d = difference between the means / ( sqrt( var.intercept_part + var.intercept_item + var.slope_part + var.slope_item + var_residual ) )
+
+So: d = estimate for fixed effect / (sqrt of sum of variances of random effects)
+
+See: Westfall et al. (2014); Hedges (2007)
+Formula from :  https://stats.stackexchange.com/questions/257985/how-can-i-derive-effect-sizes-in-lme4-and-describe-the-magnitude-of-fixed-effect
+
+```{r Equivalence_SoundComp}
+
+# Calculate Cohen's d effect size for the 3way Interaction
+d_RT_Catego <- fixef(RT_ModFinal_02)[["Congruency_C:Validity_C:Condition_C"]]/sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_02))[,5])) 
+
+# According to our pre-registration : a Cohen's d of 0.23 correspond to a raw effect size of 3.73 ms (given the variance of random factors in this model): 
+SESOI_Fixef_Prereg <- 0.23 * sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_02))[,5]))
+
+# Given that this SESOI is not achievable we have instead used twice the effect size on which we based our power analysis: fixef = -4.88
+SESOI_Fixef_Posteriori <- 4.88 * 2 
+d_SESOI_Fixef_Posteriori <-  SESOI_Fixef_Posteriori/sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_02))[,5])) 
+
+# Equivalence bounds
+bound_lower_RT_Catego <- -SESOI_Fixef_Posteriori # Lower equivalence bound
+bound_upper_RT_Catego <- +SESOI_Fixef_Posteriori # Upper equivalence bound
+
+# Perform tests centered on the lower and upper equivalence bound
+lower_RT_Catego <- contest1D(RT_ModFinal_02, 
+                   L = c(0,0,0,0,0,0,0,1), 
+                   confint=TRUE, 
+                   rhs=bound_lower_RT_Catego, 
+                   level = 0.90)
+
+lower_RT_Catego$`Pr(>|t|)`/2  # test against lower bound
+
+upper_RT_Catego <- contest1D(RT_ModFinal_02, 
+                   L = c(0,0,0,0,0,0,0,1), 
+                   confint=TRUE, 
+                   rhs=bound_upper_RT_Catego, 
+                   level = 0.9)
+
+upper_RT_Catego$`Pr(>|t|)`/2  # test against upper bound
+
+
+```
+
+
+
+##### Visual inspection of residuals
+
+```{r RT Prereg exclusion + Outliers Residual inspection, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ RT | response_id, data=df_Catego_Prereg_Excl, layout = c(3,3,26))
+# qqmath( ~ RT | Target_Type, data=df_Catego_Prereg_Excl, layout = c(1,2,1))
+
+
+qqnorm(residuals(RT_ModFinal_02))
+qqline(residuals(RT_ModFinal_02))
+
+hist(resid(RT_ModFinal_02))
+plot(density(residuals(RT_ModFinal_02)))
+
+
+plot(fitted(RT_ModFinal_02),residuals(RT_ModFinal_02))
+plot(RT_ModFinal_02)
+
+
+```
+
+After this final step Visual inspection of residual plots did not reveal any obvious deviations from homoscedasticity or normality.
+
+
+#### Results 
+
+After ensuring that experimentally induced anxiety did not impact participants' performance in terms of accuracy, we analysed the effect of threat on participants' response times. To test for this effect, we run a linear mixed models with response times as outcome and the 3-way interaction and their main effects as predictors. As random factors, we include the intercepts for subjects, as well as by-subject random slopes for the effect of validity, congruency, their interaction and Condition. The choice of random parameters is based on an automatized model comparison from the `buildmer` package to which we have applied a random addition of terms using a step-by-step procedure. Here is the formula of the model:
+
+```
+RT ~ Congruency_C*Validity_C*Condition_C + 
+     (Congruency_C*Validity_C + Condition_C || response_id)
+```
+
+This model has primarily be tested on the whole data frame (i.e., without any participant or trial exclusion). After that, the model has been tested after application of exclusions criterion based on our preregistration : remove incorrect or no-response trials, remove trials with RT more or less than 3 MAD (`r round(3*mad(df_Catego_NoNeut$RT), digit = 0)` ms) from the median RT (`r round(median(df_Catego_NoNeut$RT), digit = 0)` ms), remove participantswith an accuracy rate less than 3 MAD from the rest of the sample (Accuracy rate less than `r round((median(df_Catego_NoNeut$Accuracy_Rate)-3*mad(df_Catego_NoNeut$Accuracy_Rate))*100, digit = 1)`%). Given that this analysis show homoscedasticity problem of residuals, we apply an outlier suppression according to our preregistration. This correction tend to resolve problems of normality and non-independence of residuals. The results we report bellow are based on this specific analysis after application of exclusion criterion and outlier suppression. Here is a brief summary of the final mixed-model which predict response time:
+
+
+```{r Table RT_ModFinal}
+
+tab_model(RT_ModFinal_02)
+
+```
+
+
+In the overall, the ICC (Interclass Correlation Coefficient) of this model indicate that the majority of explained variance comes from fixed effects rather than random effects (ICC = `r round((perf_RT_ModFinal_02[1, "ICC"]*100), digits = 1)`%). In addition, the conditional R² indicate that there is `r round((perf_RT_ModFinal_02[1, "R2_conditional"]*100), digits = 1)`% of variance explained by both fixed and random effects. The marginal R² indicate that the taken individually, the fixed effects explain `r round((perf_RT_ModFinal_02[1, "R2_marginal"]*100), digits = 1)`% of the data variance in this model.
+
+
+```{r RT Mean by conditions, include = FALSE}
+
+# Mean by Validity
+Mean_RT_Validity <- df_Catego_NoNeut_Prereg_Excl_RT_Out %>% 
+  group_by(Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id))
+
+# Graphic representation
+ggplot(Mean_RT_Validity, aes(x = Cueing_Validity, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1) +
+  geom_line() +
+  xlab("Cueing_Validity") +
+  ylab("Response time")
+
+Mean_RT_Validity <- data.frame(Mean_RT_Validity, row.names = "Cueing_Validity")
+
+
+
+# Mean by Congruency
+Mean_RT_Congruency <- df_Catego_NoNeut_Prereg_Excl_RT_Out %>% 
+  group_by(Congruency) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id))
+
+# Graphic representation
+ggplot(Mean_RT_Congruency, aes(x = Congruency, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1) +
+  geom_line() +
+  xlab("Congruency") +
+  ylab("Response time")
+
+Mean_RT_Congruency <- data.frame(Mean_RT_Congruency, row.names = "Congruency")
+
+
+
+# Mean by Condition
+Mean_RT_Condition <- df_Catego_NoNeut_Prereg_Excl_RT_Out %>% 
+  group_by(Block) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id))
+
+# Graphic representation
+ggplot(Mean_RT_Condition, aes(x = Block, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1) +
+  geom_line() +
+  xlab("Condition") +
+  ylab("Response time")
+
+Mean_RT_Condition <- data.frame(Mean_RT_Condition, row.names = "Block")
+
+
+```
+
+
+
+According to fixed effects, P-values were obtained using the `lmerTest` package (Kuznetsova, Brockhoff, & Christensen, 2015). The analysis revealed main effects of Validity (*b* = `r round(coefs_RT_ModFinal_02["Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Validity_C", "Pr...t.."]), digit = 2))))`) and congruency (*b* = `r round(coefs_RT_ModFinal_02["Congruency_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Congruency_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Congruency_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Congruency_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Congruency_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Congruency_C", "Pr...t.."]), digit = 2))))`) on response time. In that way, the validity effect show that people are faster to respond to a target which appear at the cue location (*M* = `r round(Mean_RT_Validity["Valid", "mean"], digits = 0)` ms, *SE* = `r round(Mean_RT_Validity["Valid", "se"], digits = 2)`) than at an other location (*M* = `r round(Mean_RT_Validity["Invalid", "mean"], digits = 0)` ms, *SE* = `r round(Mean_RT_Validity["Invalid", "se"], digits = 2)`). About the congruency effect, participants are slower to categorize the target when the cue color match the color of the target (*M* = `r round(Mean_RT_Congruency["Congruent", "mean"], digits = 0)` ms, *SE* = `r round(Mean_RT_Congruency["Congruent", "se"], digits = 2)`) than when the color of these two stimuli do not match (*M* = `r round(Mean_RT_Congruency["Incongruent", "mean"], digits = 0)` ms, *SE* = `r round(Mean_RT_Congruency["Incongruent", "se"], digits = 2)`). 
+
+
+```{r RT No_Congruency effect, include = FALSE}
+
+df_Catego_Prereg_Excl <- df_Catego_Prereg_Excl %>%
+  mutate(NoCong_Effect = case_when(Congruency == "Congruent" ~ +0.5,
+                                   Congruency == "Incongruent" ~ +0.5,
+                                   Congruency == "NoCongruency" ~ -0.5), 
+         NoVal_Effect = case_when(Cueing_Validity == "Valid" ~ +0.5,
+                                  Cueing_Validity == "Invalid" ~ +0.5,
+                                  Cueing_Validity == "NoValidity" ~ -0.5))
+
+
+# RT_NoCue <- lmer(RT ~ NoCong_Effect*Condition_C +
+#                    (NoCong_Effect + Condition_C || response_id),
+#                  data = df_Catego_Prereg_Excl)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_NoCue.RData", RT_NoCue)
+
+load("Output/Models/Categorization_Task/RT_NoCue.RData")
+
+summary(RT_NoCue)
+
+# Save the fixed and random effects for result reporting
+coefs_RT_NoCue <- data.frame(coef(summary(RT_NoCue)))
+
+# On the means bellow, outlier correction has not been applied
+
+# Mean by conguency with no-congruency trials
+Mean_RT_NoCong <- df_Catego_Prereg_Excl %>% 
+  group_by(Congruency) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id))
+
+# Graphic representation
+ggplot(Mean_RT_NoCong, aes(x = Congruency, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1) +
+  geom_line() +
+  xlab("Congruency") +
+  ylab("Response time")
+
+Mean_RT_NoCong <- data.frame(Mean_RT_NoCong, row.names = "Congruency")
+
+```
+
+An additional analysis also reveal that people tend to be faster when no cue appear before the target (*M* = `r round(Mean_RT_NoCong["NoCongruency", "mean"], digits = 0)` ms, *SE* = `r round(Mean_RT_NoCong["NoCongruency", "se"], digits = 2)`) than in the congruent or incongruent conditions (*b* = `r round(coefs_RT_NoCue["NoCong_Effect", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_NoCue, type = "ml1")[["NoCong_Effect"]], digit =0)`) =
+`r round(coefs_RT_NoCue["NoCong_Effect", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_NoCue["NoCong_Effect", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_NoCue["NoCong_Effect", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_NoCue["NoCong_Effect", "Pr...t.."]), digit = 2))))`)
+
+
+```{r RT Interaction effect, include = FALSE}
+
+# Remove neutral trials and code the Congruency variable for simple effect inspections
+df_Catego_NoNeut_Prereg_Excl_RT_Out <- df_Catego_NoNeut_Prereg_Excl_RT_Out %>%
+  filter(Congruency != "NoCongruency") %>%
+  mutate(SimpEffect_Congru = case_when(Congruency == "Congruent" ~ 0, 
+                                       Congruency == "Incongruent" ~ 1), 
+         SimpEffect_InCongru = case_when(Congruency == "Congruent" ~ 1, 
+                                         Congruency == "Incongruent" ~ 0))
+
+
+# Simple effect of validity in congruent trials
+
+# RT_SimpEffect_Cong <- lmer(RT ~ SimpEffect_Congru*Validity_C*Condition_C +
+#                              (SimpEffect_Congru*Validity_C + Condition_C || response_id),
+#                            data = df_Catego_NoNeut_Prereg_Excl_RT_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_SimpEffect_Cong.RData", RT_SimpEffect_Cong)
+
+load("Output/Models/Categorization_Task/RT_SimpEffect_Cong.RData")
+summary(RT_SimpEffect_Cong)
+
+# Save the fixed and random effects for result reporting
+coefs_RT_SimpEffect_Cong <- data.frame(coef(summary(RT_SimpEffect_Cong)))
+
+
+# Simple effect of validity in incongruent trials
+
+# RT_SimpEffect_Incong <- lmer(RT ~ SimpEffect_InCongru*Validity_C*Condition_C +
+#                                (SimpEffect_InCongru*Validity_C + Condition_C || response_id),
+#                              data = df_Catego_NoNeut_Prereg_Excl_RT_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_SimpEffect_Incong.RData", RT_SimpEffect_Incong)
+
+load("Output/Models/Categorization_Task/RT_SimpEffect_Incong.RData")
+summary(RT_SimpEffect_Incong)
+
+# Save the fixed and random effects for result reporting
+coefs_RT_SimpEffect_Incong <- data.frame(coef(summary(RT_SimpEffect_Incong)))
+
+```
+
+In addition, results show a significant interaction effect between validity and congruency (*b* = `r round(coefs_RT_ModFinal_02["Congruency_C:Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Congruency_C:Validity_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Congruency_C:Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Congruency_C:Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Congruency_C:Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Congruency_C:Validity_C", "Pr...t.."]), digit = 2))))`). This interaction reveal that the effect of validity on RT is higher in congruent trials (*b* = `r round(coefs_RT_SimpEffect_Cong["Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_SimpEffect_Cong, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_RT_SimpEffect_Cong["Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_SimpEffect_Cong["Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_SimpEffect_Cong["Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_SimpEffect_Cong["Validity_C", "Pr...t.."]), digit = 2))))`) than in incongruent trials (*b* = `r round(coefs_RT_SimpEffect_Incong["Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_SimpEffect_Incong, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_RT_SimpEffect_Incong["Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_SimpEffect_Incong["Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_SimpEffect_Incong["Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_SimpEffect_Incong["Validity_C", "Pr...t.."]), digit = 3))))`). It means that when there is no match between cue and the target colors, the difference between valid and invalid trials is really small in comparison to a situation where there is a  match cue/target. These results are in line with the contingent capture hypothesis (Folk & Remington, 1998).
+
+
+```{r RT Graph contingent capture}
+
+# Mean by conguency with no-congruency trials
+Mean_RT_Contingent_Capture <- df_Catego_Prereg_Excl %>% 
+  group_by(Cueing_Validity, Congruency) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id)) %>%
+  mutate(Cueing_Validity = recode(Cueing_Validity, 'NoValidity' = 'Invalid'))
+
+Mean_RT_Contingent_Capture_2 <- Mean_RT_Contingent_Capture %>%
+  filter(Congruency == "NoCongruency") %>%
+  mutate(Cueing_Validity = 'Valid')
+
+Mean_RT_Contingent_Capture <- rbind(Mean_RT_Contingent_Capture, Mean_RT_Contingent_Capture_2)
+
+
+ggplot(Mean_RT_Contingent_Capture, aes(x = Cueing_Validity, y = mean, color = Congruency, linetype = Congruency, group = Congruency)) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Validity") +
+  ylab("Response time") +
+  scale_x_discrete(limits = c("Valid","Invalid")) +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) + 
+  scale_linetype_manual(values = c("solid", "solid", "52"))
+
+
+
+```
+
+
+Regarding the effect of threat on RT, this analysis shows neither a significant main of threat (*b* = `r round(coefs_RT_ModFinal_02["Condition_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Condition_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Condition_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Condition_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Condition_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Condition_C", "Pr...t.."]), digit = 2))))`), nor significant interaction effects with other variables (for the interaction with validity: *b* = `r round(coefs_RT_ModFinal_02["Validity_C:Condition_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Validity_C:Condition_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Validity_C:Condition_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Validity_C:Condition_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Validity_C:Condition_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Validity_C:Condition_C", "Pr...t.."]), digit = 2))))` ; for the interaction with congruency: *b* = `r round(coefs_RT_ModFinal_02["Congruency_C:Condition_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Congruency_C:Condition_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Congruency_C:Condition_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Congruency_C:Condition_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Congruency_C:Condition_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Congruency_C:Condition_C", "Pr...t.."]), digit = 2))))` ;  and for the 3-way interaction: (*b* = `r round(coefs_RT_ModFinal_02["Congruency_C:Validity_C:Condition_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_ModFinal_02, type = "ml1")[["Congruency_C:Validity_C:Condition_C"]], digit =0)`) =
+`r round(coefs_RT_ModFinal_02["Congruency_C:Validity_C:Condition_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_ModFinal_02["Congruency_C:Validity_C:Condition_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_ModFinal_02["Congruency_C:Validity_C:Condition_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_ModFinal_02["Congruency_C:Validity_C:Condition_C", "Pr...t.."]), digit = 2))))`). Taken together, these results suggest that threat manipulation do not have any effect on participant response time. I addition, this threatening manipulation, do not lead participants to be slower or faster given the cue-validity or the cue-congruency in each trial. These results seems to contradict our hypothesis of a reinforcement of contingent attentional capture in threatening context, at least in the categorization task. 
+
+The graph bellow represent RT in each experimental condition
+
+```{r RT Graphic representation}
+
+
+# Mean by condition*Congruency*Validity
+Mean_RT_3way <- df_Catego_NoNeut_Prereg_Excl_RT_Out %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))),  n=length(response_id))
+
+
+# Graphic representation
+ggplot(Mean_RT_3way, aes(x = Block, y = mean, color = Congruency, linetype = Cueing_Validity, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Response time") +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) +
+  scale_linetype_manual(values = c("solid", "52", "29"), breaks = c("Valid", "Invalid", "NoValidity"), guide = guide_legend(title = "Cueing_Validity"))
+
+
+# The means bellow do not include any outlier suppression
+
+# Mean by condition*Congruency*Validityincluding toon block and neutral trials
+Mean_RT_3way_all_trials <- df_Catego_Prereg_Excl %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))),  n=length(response_id))
+
+
+# Graphic representation
+ggplot(Mean_RT_3way_all_trials, aes(x = Block, y = mean, color = Congruency, linetype = Cueing_Validity, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Response time") +
+  scale_color_manual(values = c("green4", "red", "black"), guide = guide_legend(title = "Congruency")) +
+  scale_linetype_manual(values = c("solid", "52", "29"), breaks = c("Valid", "Invalid", "NoValidity"), guide = guide_legend(title = "Cueing_Validity"))
+
+
+```
+
+
+Here is graphic representations of random effect adjustments (BLUPS) of this model for participants:
+
+```{r RT BLUPS}
+
+# Plot BLUPS for each random effect
+dotplot(ranef(RT_ModFinal_02, condVar = TRUE))
+
+# # The random effect of experimental condition on accuracy by participant
+#  languageR::xylowess.fnc(RT ~ Condition_C | response_id, data = df_Catego_Prereg_Excl_RT_Out, ylab = "RT",layout = c(3,3,26))
+
+ 
+# # An other graphic representation
+#  lattice::xyplot(RT ~ Condition_C | response_id, data=df_Catego_Prereg_Excl_RT_Out, ylab="RT", type=c("p","r","g"),layout = c(3,3,26))
+
+```
+
+
+## Response Time: Sounds Comparison (Toon VS Threat)
+
+In these analyses, we test if there is a significant difference between the effect of screams and vocalizations on response time.
+
+```{r RT ComparisonSounds}
+
+# Build a dataframe without the toon condition and without no-congruency trials
+df_Catego_NoCtrl <- df_Catego %>%
+  filter(Congruency != "NoCongruency") %>%
+  filter(Block != "Control") %>%
+  
+  mutate(Sound_Type = case_when(Block == "Toon" ~ -0.5,
+                                Block == "Threat" ~ +0.5)) %>%
+  mutate(Sound_Type_str = case_when(Block == "Toon" ~ "Vocalization",
+                                Block == "Threat" ~ "Scream"))
+
+
+df_Catego_NoCtrl_Prereg_Excl <- df_Catego_NoCtrl %>%
+  filter(Response_Status != 3) %>%
+  filter(Response_Status != 2) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate)))
+
+
+# RT_ModFinal_SoundComp_2 <- lmer(RT ~ Congruency_C*Validity_C*Sound_Type +
+#                                   (Congruency_C*Validity_C + Sound_Type || response_id),
+#                                 data = df_Catego_NoCtrl_Prereg_Excl)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_SoundComp_2.RData", RT_ModFinal_SoundComp_2)
+
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_SoundComp_2.RData")
+
+summary(RT_ModFinal_SoundComp_2)
+performance::model_performance(RT_ModFinal_SoundComp_2)
+
+```
+
+### Outlier exclusion
+
+```{r RT ComparisonSounds-Outlier}
+
+df_Catego_NoCtrl_Prereg_Excl <- df_Catego_NoCtrl_Prereg_Excl %>%
+  mutate(Hat_RT_2 = hatvalues(RT_ModFinal_SoundComp_2)) %>%
+  mutate(Rstud_RT_2 = rstudent(RT_ModFinal_SoundComp_2))%>%
+  mutate(Cook_RT_2 = cooks.distance(RT_ModFinal_SoundComp_2))
+
+
+df_Catego_NoCtrl_Prereg_Excl_Out <- df_Catego_NoCtrl_Prereg_Excl %>%
+  filter(Rstud_RT_2 <= 3 & Rstud_RT_2 >= -3) %>%
+  filter(Hat_RT_2 <= .30) %>%
+  filter(Cook_RT_2 <= .025)
+
+
+# RT_ModFinal_SoundComp_02 <- lmer(RT ~ Congruency_C*Validity_C*Sound_Type +
+#                                   (Congruency_C*Validity_C + Sound_Type || response_id),
+#                                 data = df_Catego_NoCtrl_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_SoundComp_02.RData", RT_ModFinal_SoundComp_02)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_SoundComp_02.RData")
+
+summary(RT_ModFinal_SoundComp_02)
+performance::model_performance(RT_ModFinal_SoundComp_02)
+
+
+# Save the fixed and random effects for result reporting
+coefs_RT_ModFinal_SoundComp_02 <- data.frame(coef(summary(RT_ModFinal_SoundComp_02)))
+
+# Get parameters for model' fixed effects
+effects_RT_ModFinal_SoundComp_02 <- broom.mixed::tidy(RT_ModFinal_SoundComp_02)
+
+# Calculate the overall model performance
+perf_RT_ModFinal_SoundComp_02 <- performance::model_performance(RT_ModFinal_SoundComp_02)
+
+# # To extract fixed effects
+#fixef(RT_ModFinal_SoundComp_02)
+
+```
+
+### Equivalence Testing
+
+Formula to calculate Cohen's d effect size : 
+
+d = difference between the means / ( sqrt( var.intercept_part + var.intercept_item + var.slope_part + var.slope_item + var_residual ) )
+
+So: d = estimate for fixed effect / (sqrt of sum of variances of random effects)
+
+See: Westfall et al. (2014); Hedges (2007)
+Formula from :  https://stats.stackexchange.com/questions/257985/how-can-i-derive-effect-sizes-in-lme4-and-describe-the-magnitude-of-fixed-effect
+https://pedermisager.org/blog/mixed_model_equivalence/
+
+
+```{r Equivalence_SoundComp}
+
+# Calculate Cohen's d effect size for the 3way Interaction
+d_SoundComp <- fixef(RT_ModFinal_SoundComp_02)[["Congruency_C:Validity_C:Sound_Type"]]/sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_SoundComp_02))[,5])) 
+
+# According to our pre-registration : a Cohen's d of 0.23 correspond to a raw effect size of 3.73 ms (given the variance of random factors in this model): 
+SESOI_Fixef_Prereg <- 0.23 * sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_SoundComp_02))[,5]))
+
+# Given that this SESOI is not achievable we have instead used twice the effect size on which we based our power analysis: fixef = -4.88
+SESOI_Fixef_Posteriori <- 4.88 * 2 
+d_SESOI_Fixef_Posteriori <-  SESOI_Fixef_Posteriori/sqrt(sum(as.data.frame(VarCorr(RT_ModFinal_SoundComp_02))[,5])) 
+
+# Equivalence bounds
+bound_lower_SoundComp <- -SESOI_Fixef_Posteriori # Lower equivalence bound
+bound_upper_SoundComp <- +SESOI_Fixef_Posteriori # Upper equivalence bound
+
+# Perform tests centered on the lower and upper equivalence bound
+lower_SoundComp <- contest1D(RT_ModFinal_SoundComp_02, 
+                   L = c(0,0,0,0,0,0,0,1), 
+                   confint=TRUE, 
+                   rhs=bound_lower_SoundComp, 
+                   level = 0.90)
+
+lower_SoundComp$`Pr(>|t|)`/2  # test against lower bound
+
+upper_SoundComp <- contest1D(RT_ModFinal_SoundComp_02, 
+                   L = c(0,0,0,0,0,0,0,1), 
+                   confint=TRUE, 
+                   rhs=bound_upper_SoundComp, 
+                   level = 0.9)
+
+upper_SoundComp$`Pr(>|t|)`/2  # test against upper bound
+
+
+```
+
+
+### Graphic representation
+
+```{r RT ComparisonSounds-GraphInteract}
+
+# RT_ModFinal_SoundComp_str <- lmer(RT ~ Congruency*Cueing_Validity*Sound_Type_str +
+#                                   (Congruency*Cueing_Validity + Sound_Type_str || response_id),
+#                                 data = df_Catego_NoCtrl_Prereg_Excl_Out)
+# 
+# # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_SoundComp_str.RData", RT_ModFinal_SoundComp_str)
+ 
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_SoundComp_str.RData")
+
+summary(RT_ModFinal_SoundComp_str)
+
+
+plot_model(RT_ModFinal_SoundComp_str, type = "pred", terms = c("Congruency", "Cueing_Validity" ))
+
+
+plot_model(RT_ModFinal_SoundComp_str, type = "int", terms = c("Sound_Type_str", "Cueing_Validity", "Congruency"))
+
+```
+
+
+## Response Time : Exploratory
+
+Given that the Threat and the Toon block show similar results, we combine here these two blocks and analyse their effect against the control Block. This analysis contradict our pre-registration in which we made the hypothesis than the Toon block should have the same effect than the control block.
+
+```{r RT Combine Toon&Threat-ThTo}
+
+df_Catego_ThTo_Prereg_Excl <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter(Response_Status != 2) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate))) %>%
+
+  mutate(Sounds_Presence_C = case_when(Block == "Control" ~ -0.5,
+                                 Block == "Threat" ~ +0.5,
+                                 Block == "Toon" ~ +0.5))%>%
+
+  mutate(Sounds_Presence_str = case_when(Block == "Control" ~ "Without_Sound",
+                                 Block == "Threat" ~ "With_Sound",
+                                 Block == "Toon" ~ "With_Sound")) %>%
+  
+  filter(Congruency != "NoCongruency")
+
+
+# RT_ModFinal_ThTo_2 <- lmer(RT ~ Congruency_C*Validity_C*Sounds_Presence_C +
+#                                   (Congruency_C*Validity_C + Sounds_Presence_C || response_id),
+#                                 data = df_Catego_ThTo_Prereg_Excl)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_2.RData", RT_ModFinal_ThTo_2)
+
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_2.RData")
+
+summary(RT_ModFinal_ThTo_2)
+performance::model_performance(RT_ModFinal_ThTo_2)
+
+```
+
+### Outlier exclusion
+
+```{r RT outliers-ThTo}
+
+df_Catego_ThTo_Prereg_Excl <- df_Catego_ThTo_Prereg_Excl %>%
+  mutate(Hat_RT_2 = hatvalues(RT_ModFinal_ThTo_2)) %>%
+  mutate(Rstud_RT_2 = rstudent(RT_ModFinal_ThTo_2))%>%
+  mutate(Cook_RT_2 = cooks.distance(RT_ModFinal_ThTo_2))
+
+
+df_Catego_ThTo_Prereg_Excl_Out <- df_Catego_ThTo_Prereg_Excl %>%
+  filter(Rstud_RT_2 <= 3 & Rstud_RT_2 >= -3) %>%
+  filter(Hat_RT_2 <= .030) %>%
+  filter(Cook_RT_2 <= .023)
+
+
+# RT_ModFinal_ThTo_02 <- lmer(RT ~ Congruency_C*Validity_C*Sounds_Presence_C +
+#                                   (Congruency_C*Validity_C + Sounds_Presence_C || response_id),
+#                                 data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_02.RData", RT_ModFinal_ThTo_02)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_02.RData")
+
+summary(RT_ModFinal_ThTo_02)
+performance::model_performance(RT_ModFinal_ThTo_02)
+
+
+# Save the fixed and random effects for result reporting
+coefs_RT_ModFinal_ThTo_02 <- data.frame(coef(summary(RT_ModFinal_ThTo_02)))
+
+# Get parameters for model' fixed effects
+effects_RT_ModFinal_ThTo_02 <- broom.mixed::tidy(RT_ModFinal_ThTo_02)
+
+# Calculate the overall model performance
+perf_RT_ModFinal_ThTo_02 <- performance::model_performance(RT_ModFinal_ThTo_02)
+
+# # To extract fixed effects
+#fixef(RT_ModFinal_ThTo_02)
+
+
+```
+
+### Graphic representation
+
+```{r RT Graph 3way Interact-ThTo }
+
+# RT_ModFinal_ThTo_str <- lmer(RT ~ Congruency*Cueing_Validity*Sounds_Presence_str +
+#                                   (Congruency*Cueing_Validity + Sounds_Presence_str || response_id),
+#                                 data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # Save the model
+#  save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_str.RData", RT_ModFinal_ThTo_str)
+ 
+load(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_str.RData")
+
+summary(RT_ModFinal_ThTo_str)
+
+
+plot_model(RT_ModFinal_ThTo_str, type = "pred", terms = c("Congruency", "Cueing_Validity" ))
+
+
+plot_model(RT_ModFinal_ThTo_str, type = "int", terms = c("Sounds_Presence_str", "Cueing_Validity", "Congruency"))
+
+```
+
+### Simple effects 
+
+```{r SimpleEffect-RT-ThTo}
+
+# Remove neutral trials and code the Congruency variable for simple effect inspections
+df_Catego_ThTo_Prereg_Excl_Out <- df_Catego_ThTo_Prereg_Excl_Out %>%
+  mutate(SimpEffect_Congru = case_when(Congruency == "Congruent" ~ 0, 
+                                       Congruency == "Incongruent" ~ 1), 
+         SimpEffect_InCongru = case_when(Congruency == "Congruent" ~ 1, 
+                                         Congruency == "Incongruent" ~ 0)) %>%
+  
+  mutate(SimpEffect_Sound = case_when(Sounds_Presence_str == "With_Sound" ~ 0, 
+                                      Sounds_Presence_str == "Without_Sound" ~ 1), 
+         SimpEffect_NoSound = case_when(Sounds_Presence_str == "With_Sound" ~ 1, 
+                                        Sounds_Presence_str == "Without_Sound" ~ 0))
+
+
+#########################################################
+
+# Simple effect of the Contingent capture effect
+
+# Contingent capture effect when participants hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_Sound <- lmer(RT ~ Congruency_C*Validity_C*SimpEffect_Sound +
+#                                            (Congruency_C*Validity_C + SimpEffect_Sound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Sound.RData", RT_ModFinal_ThTo_SimpEffect_Sound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Sound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_Sound)
+coefs_RT_ModFinal_ThTo_SimpEffect_Sound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_Sound)))
+
+# Simple effect of validity in congruent trials when participants do not hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_NoSound <- lmer(RT ~ Congruency_C*Validity_C*SimpEffect_NoSound +
+#                                            (Congruency_C*Validity_C + SimpEffect_NoSound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_NoSound.RData", RT_ModFinal_ThTo_SimpEffect_NoSound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_NoSound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_NoSound)
+coefs_RT_ModFinal_ThTo_SimpEffect_NoSound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_NoSound)))
+
+
+#########################################################
+#########################################################
+
+#########################################################
+#########################################################
+
+# Congruent trials
+
+# Simple effect of validity in congruent trials when participants hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_Cong_Sound <- lmer(RT ~ SimpEffect_Congru*Validity_C*SimpEffect_Sound +
+#                                            (SimpEffect_Congru*Validity_C + SimpEffect_Sound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Cong_Sound.RData", RT_ModFinal_ThTo_SimpEffect_Cong_Sound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Cong_Sound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_Cong_Sound)
+coefs_RT_ModFinal_ThTo_SimpEffect_Cong_Sound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_Cong_Sound)))
+
+
+# Simple effect of validity in congruent trials when participants do not hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_Cong_NoSound <- lmer(RT ~ SimpEffect_Congru*Validity_C*SimpEffect_NoSound +
+#                                            (SimpEffect_Congru*Validity_C + SimpEffect_NoSound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Cong_NoSound.RData", RT_ModFinal_ThTo_SimpEffect_Cong_NoSound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Cong_NoSound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_Cong_NoSound)
+coefs_RT_ModFinal_ThTo_SimpEffect_Cong_NoSound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_Cong_NoSound)))
+
+
+
+#########################################################
+
+# Incongruent trials
+
+# Simple effect of validity in incongruent trials when participants hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_Incong_Sound <- lmer(RT ~ SimpEffect_InCongru*Validity_C*SimpEffect_Sound +
+#                                            (SimpEffect_InCongru*Validity_C + SimpEffect_Sound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Incong_Sound.RData", RT_ModFinal_ThTo_SimpEffect_Incong_Sound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Incong_Sound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_Incong_Sound)
+coefs_RT_ModFinal_ThTo_SimpEffect_Incong_Sound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_Incong_Sound)))
+
+
+# Simple effect of validity in incongruent trials when participants do not hear sounds
+
+# RT_ModFinal_ThTo_SimpEffect_Incong_NoSound <- lmer(RT ~ SimpEffect_InCongru*Validity_C*SimpEffect_NoSound +
+#                                            (SimpEffect_InCongru*Validity_C + SimpEffect_NoSound || response_id),
+#                                          data = df_Catego_ThTo_Prereg_Excl_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Incong_NoSound.RData", RT_ModFinal_ThTo_SimpEffect_Incong_NoSound)
+
+load("Output/Models/Categorization_Task/RT_ModFinal_ThTo_SimpEffect_Incong_NoSound.RData")
+
+summary(RT_ModFinal_ThTo_SimpEffect_Incong_NoSound)
+coefs_RT_ModFinal_ThTo_SimpEffect_Incong_NoSound <- data.frame(coef(summary(RT_ModFinal_ThTo_SimpEffect_Incong_NoSound)))
+
+
+```
+
+
+## Response Time : Self reported anxiety effect
+
+### Preregistration exclusion criterion
+
+```{r Rt Anxiety effect-ThTo - Prereg}
+
+df_Catego <- df_Catego %>%
+  mutate(Evol_Anxiety_Bart = (Fear_Score - Fear_Score_Pretest),
+         Evol_Anxiety_Mean = (Fear_Mean - Fear_Mean_Pretest)) %>%
+  mutate(Threat_Scream_Tot = rowMeans(select(df_Catego,c(Threat_Scream1, Threat_Scream2))),
+         Threat_Vocal_Tot = rowMeans(select(df_Catego,c(Threat_Vocal1, Threat_Vocal2)))) %>%
+  
+  mutate(Threat_by_sounds = (Threat_Scream1 - Threat_Vocal1), 
+         Concerned_by_sounds = (Threat_Scream2 - Threat_Vocal2)) %>%
+  
+  mutate(Threat_Scream_Mean = rowMeans(select(df_Catego,c(Threat_Scream1, Threat_Scream2))), 
+         Threat_Vocal_Mean = rowMeans(select(df_Catego,c(Threat_Vocal1, Threat_Vocal2)))) %>%
+  
+  mutate(Threat_Sounds_Mean = (Threat_Scream_Mean - Threat_Vocal_Mean)) 
+
+
+df_Catego_Anxiety_ThTo_Prereg_Excl <- df_Catego %>%
+  filter(Response_Status != 3) %>%
+  filter(Response_Status != 2) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT))) %>%
+  filter((Accuracy_Rate >= median(Accuracy_Rate)-3*mad(Accuracy_Rate))) %>%
+
+  mutate(Sounds_Presence_C = case_when(Block == "Control" ~ -0.5,
+                                 Block == "Threat" ~ +0.5,
+                                 Block == "Toon" ~ +0.5))%>%
+
+  mutate(Sounds_Presence_str = case_when(Block == "Control" ~ "Without_Sound",
+                                 Block == "Threat" ~ "With_Sound",
+                                 Block == "Toon" ~ "With_Sound")) %>%
+  
+  filter(Congruency != "NoCongruency")
+
+
+
+RT_Anxiety_1_Catego <- lmer(RT ~ Congruency_C*Validity_C*Evol_Anxiety_Mean +
+                         (Congruency_C*Validity_C + Evol_Anxiety_Mean || response_id),
+                     data = df_Catego_Anxiety_ThTo_Prereg_Excl)
+
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/RT_Anxiety_1_Catego.RData", RT_Anxiety_1_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/RT_Anxiety_1_Catego.RData")
+
+summary(RT_Anxiety_1_Catego)
+performance::model_performance(RT_Anxiety_1_Catego)
+
+```
+
+#### Visual inspection of residuals
+
+```{r RT Anxiety Prereg exclusion Residual inspection, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ RT | response_id, data=df_Catego_Prereg_Excl, layout = c(3,3,26))
+# qqmath( ~ RT | Target_Type, data=df_Catego_Prereg_Excl, layout = c(1,2,1))
+
+
+qqnorm(residuals(RT_Anxiety_1_Catego))
+qqline(residuals(RT_Anxiety_1_Catego))
+
+hist(resid(RT_Anxiety_1_Catego))
+plot(density(residuals(RT_Anxiety_1_Catego)))
+
+
+plot(fitted(RT_Anxiety_1_Catego),residuals(RT_Anxiety_1_Catego))
+
+# If we want to plot the qq graph for any random effect
+# qqnorm(ranef(RT_Anxiety_1_Catego)$response_id[[4]]) 
+# qqline(ranef(RT_Anxiety_1_Catego)$response_id[[4]])
+
+
+# If we want to plot The residuals against a variable
+#plot(df_Catego_Anxiety_ThTo_Prereg_Excl$Evol_Anxiety_Mean,residuals(RT_Anxiety_1_Catego))
+
+
+```
+
+#### Outlier exclusion
+
+
+```{r Rt Anxiety effect outlier exclusion}
+
+df_Catego_Anxiety_ThTo_Prereg_Excl <- df_Catego_Anxiety_ThTo_Prereg_Excl %>%
+  mutate(Hat_Anxiety_1 = hatvalues(RT_Anxiety_1_Catego)) %>%
+  mutate(Rstud_Anxiety_1 = rstudent(RT_Anxiety_1_Catego))%>%
+  mutate(Cook_Anxiety_1 = cooks.distance(RT_Anxiety_1_Catego))
+
+
+df_Catego_Anxiety_ThTo_Prereg_Excl_Out <- df_Catego_Anxiety_ThTo_Prereg_Excl %>%
+  filter(Rstud_Anxiety_1 <= 3 & Rstud_Anxiety_1 >= -3) %>%
+  filter(Hat_Anxiety_1 <= .025) %>%
+  filter(Cook_Anxiety_1 <= .020)
+
+
+RT_Anxiety_01_Catego <- lmer(RT ~ Congruency_C* Validity_C * Evol_Anxiety_Mean +
+                        (Congruency_C*Validity_C + Evol_Anxiety_Mean || response_id),
+                      data = df_Catego_Anxiety_ThTo_Prereg_Excl_Out)
+
+
+# Save the model
+save(file = "Output/Models/Categorization_Task/RT_Anxiety_01_Catego.RData", RT_Anxiety_01_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/RT_Anxiety_01_Catego.RData")
+
+summary(RT_Anxiety_01_Catego)
+performance::model_performance(RT_Anxiety_01_Catego)
+
+
+```
+
+#### Visual inspection of residuals
+
+```{r RT Anxiety Prereg exclusion Residual inspection - Outlier suppression, EVAL = FALSE}
+
+# Usefull references : https://stats.stackexchange.com/questions/524376/testing-glmer-model-assumptions-optionally-in-r 
+
+# qqmath( ~ RT | response_id, data=df_Catego_Prereg_Excl_Anxiety_Out, layout = c(3,3,26))
+# qqmath( ~ RT | Target_Type, data=df_Catego_Prereg_Excl_Anxiety_Out, layout = c(1,2,1))
+
+
+qqnorm(residuals(RT_Anxiety_01_Catego))
+qqline(residuals(RT_Anxiety_01_Catego))
+
+hist(resid(RT_Anxiety_01_Catego))
+plot(density(residuals(RT_Anxiety_01_Catego)))
+
+
+plot(fitted(RT_Anxiety_01_Catego),residuals(RT_Anxiety_01_Catego))
+
+```
+
+#### Covariates
+
+Here, we add some covariates to the analysis beacause survey analyses
+reveal that these variables have an impact on self reported anxiety: -
+level of PTSD - A composite score of threat by screams (the mean of
+preoccupations and sense of threat by screams items)
+
+```{r Rt Anxiety effect covariates}
+
+
+RT_Anxiety_01_cov_Catego <- lmer(RT ~ Congruency_C * Validity_C * Evol_Anxiety_Mean +
+                                    PTSD_Score +  Threat_Sounds_Mean  + 
+                                    (Congruency_C*Validity_C + Evol_Anxiety_Mean || response_id),
+                          data = df_Catego_Anxiety_ThTo_Prereg_Excl_Out)
+
+
+# # Save the model
+save(file = "Output/Models/Categorization_Task/RT_Anxiety_01_cov_Catego.RData", RT_Anxiety_01_cov_Catego)
+
+
+load(file = "Output/Models/Categorization_Task/RT_Anxiety_01_cov_Catego.RData")
+
+summary(RT_Anxiety_01_cov_Catego)
+performance::model_performance(RT_Anxiety_01_cov_Catego)
+
+
+# Save the fixed and random effects for result reporting
+coefs_RT_Anxiety_01_cov_Catego <- data.frame(coef(summary(RT_Anxiety_01_cov_Catego)))
+
+# Get parameters for model' fixed effects
+effects_RT_Anxiety_01_cov_Catego <- broom.mixed::tidy(RT_Anxiety_01_cov_Catego)
+
+# Calculate the overall model performance
+perf_RT_Anxiety_01_cov_Catego <- performance::model_performance(RT_Anxiety_01_cov_Catego)
+
+# To extract fixed effects
+fixef(RT_Anxiety_01_cov_Catego)
+
+```
+
+
+
+#### Results 
+
+Face to our first resuts which show that the threat manipulation do not have any significant impact on response time in the categorisation task, we ran an other mixed effect model to predict RT which take into account self reported anxiety instead of the experimental manipulation. This score of self reported anxiety is the difference between the pre-measurement of anxiety and the measurement just after each block. To run this analysis, we used exactly the same model as the precedent one and replace the condition variable by the self reported anxiety.the final model we used is :   
+
+
+```
+RT ~ Congruency_C * Validity_C * Evol_Anxiety_Mean + 
+      PTSD_Score +  Threat_Scream_Tot  +
+      (Congruency_C*Validity_C + Evol_Anxiety_Mean || response_id)
+```
+
+This model has primarily be tested on the dataframe which take into account participants and trials suppressions according to our preregistration. Outlier suppression has also been applied after visual inspection of homoscedasticity and normality of residuals. Here is a summary of the final mixed-model which predict response time:
+
+
+```{r Table RT_Anxiety}
+
+tab_model(RT_Anxiety_01_cov)
+
+```
+
+As in the previous analysis, results show significant effect of cue validity (*b* = `r round(coefs_RT_Anxiety_01_cov["Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Validity_C"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Validity_C", "Pr...t.."]), digit = 2))))`), cue congruency (*b* = `r round(coefs_RT_Anxiety_01_cov["Congruency_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Congruency_C"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Congruency_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Congruency_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Congruency_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Congruency_C", "Pr...t.."]), digit = 2))))`), and the interaction between these two variables (*b* = `r round(coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Congruency_C:Validity_C"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C", "Pr...t.."]), digit = 2))))`).
+
+
+In the same way as our first analysis showing no significant effect of the threatening
+manipulation on response times, we do not  find a significant effect of
+anxiety evolution on response time (*b* = `r round(coefs_RT_Anxiety_01_cov["Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Evol_Anxiety_Mean"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Evol_Anxiety_Mean", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Evol_Anxiety_Mean", "Pr...t.."]), digit = 2))))`). 
+
+Moreover, this analysis reveal a significant interaction between level of anxiety and cue validity (*b* = `r round(coefs_RT_Anxiety_01_cov["Validity_C:Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Validity_C:Evol_Anxiety_Mean"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Validity_C:Evol_Anxiety_Mean", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Validity_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Validity_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Validity_C:Evol_Anxiety_Mean", "Pr...t.."]), digit = 3))))`), whereas the interaction with congruency or the 3-way interaction are not significant (respectively, *b* = `r round(coefs_RT_Anxiety_01_cov["Congruency_C:Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Congruency_C:Evol_Anxiety_Mean"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Congruency_C:Evol_Anxiety_Mean", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Congruency_C:Evol_Anxiety_Mean", "Pr...t.."]), digit = 2))))` and *b* = `r round(coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C:Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Congruency_C:Validity_C:Evol_Anxiety_Mean"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C:Evol_Anxiety_Mean", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C:Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Congruency_C:Validity_C:Evol_Anxiety_Mean", "Pr...t.."]), digit = 2))))`). Even if the 3-way interaction we predicted is not significant the interaction between self reported anxiety and cue validity reveal that the interference effect between valid and invalid cue is reduced when participant anxiety increases. It means that the most participants report anxiety during a block in comparison to the beginning of the experiment, the slower they are to categorize the target. This results is congruent with previous literature which postulates that in under induced-anxiety, people tend to be less sensitive to peripheral information. So people tend to decrease the utilization of cues, no matter their validity of the congruency of these cues with attentional settings. Here is a graph of this interaction between cue validity and self reported anxiety:
+
+```{r RT Interaction effect Anxiety X Validity}
+
+
+# RT_Int_Validity_Anxiety <- lmer(RT ~ Cueing_Validity*Evol_Anxiety_Mean +
+#                                 (Cueing_Validity + Evol_Anxiety_Mean || response_id),
+#                                 data = df_Catego_NoNeut_Prereg_Excl_Anxiety_Out)
+# 
+# # # Save the model
+# save(file = "Output/Models/Categorization_Task/RT_Int_Validity_Anxiety.RData", RT_Int_Validity_Anxiety)
+
+
+load(file = "Output/Models/Categorization_Task/RT_Int_Validity_Anxiety.RData")
+summary(RT_Int_Validity_Anxiety)
+
+plot_model(RT_Int_Validity_Anxiety, type = "pred", terms = c("Evol_Anxiety_Mean", "Cueing_Validity"))
+
+
+```
+
+These effects of anxiety and its interaction with cue validity on response time are maintained when we include level of PTSD (*b* = `r round(coefs_RT_Anxiety_01_cov["PTSD_Score", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["PTSD_Score"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["PTSD_Score", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["PTSD_Score", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["PTSD_Score", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["PTSD_Score", "Pr...t.."]), digit = 3))))`) and the reported threatening nature of screams (*b* = `r round(coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Anxiety_01_cov, type = "ml1")[["Threat_Scream_Tot"]], digit =0)`) =
+`r round(coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."]), digit = 3))))`) as covariates in these analysis. These covariates do not impact significantly response times.
+
+
+
+
+## Old analysis and results reporting
+
+The second effet is more interesting and show that the more participants feel threatened by screams the faster they respond on the categorisation task. Here is a graphic representation of this effect: 
+
+```{r RT Interaction Scream Anxiety, include = FALSE}
+
+RT_Int_ThreatScreams_Anxiety <- lmer(RT ~ Threat_Scream_Tot * Evol_Anxiety_Mean +
+                       (Evol_Anxiety_Mean || response_id),
+                     data = df_Catego_NoNeut_Prereg_Excl_Anxiety_Out)
+
+summary(RT_Int_ThreatScreams_Anxiety)
+
+# Save the fixed and random effects for result reporting
+coefs_RT_Int_ThreatScreams_Anxiety <- data.frame(coef(summary(RT_Int_ThreatScreams_Anxiety)))
+
+```
+
+```{r RT Graph Screams}
+
+RT_Graph_ThreatScreams <- lmer(RT ~ Threat_Scream_Tot +
+                       (1 | response_id),
+                     data = df_Catego_NoNeut_Prereg_Excl_Anxiety_Out)
+
+plot_model(RT_Graph_ThreatScreams, type = "slope", terms = "Threat_Scream_Tot")
+
+```
+
+
+An additional analysis, revealed a marginally significant interaction between self reported anxiety and the perceived threatening nature of screams (*b* = `r round(coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
+*t*(`r round(get_df(RT_Int_ThreatScreams_Anxiety, type = "ml1")[["Threat_Scream_Tot:Evol_Anxiety_Mean"]], digit =0)`) =
+`r round(coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "t.value"], digits = 2)`, *p* `r ifelse((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."]), digit = 3))))`). It means that for participants that feel less preoccupied by the screams and who judge it as not threatening, the effect of self reported anxiety on RT is large whereas this effect is not maintained when participants report being highly threatened by the screams. Here is a graph of this interaction: 
+
+```{r RT graph Screams Anxiety}
+
+plot_model(RT_Int_ThreatScreams_Anxiety, type = "int", terms = c("Threat_Scream_Tot", "Evol_Anxiety_Mean"))
+
+plot_model(RT_Int_ThreatScreams_Anxiety, type = "pred", terms = c("Evol_Anxiety_Mean", "Threat_Scream_Tot"))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r Sequential representation of RT, eval = FALSE}
+
+Ppt_List <- unique(df_Catego$response_id)
+
+
+for (i in Ppt_List) {
+ df_order <- df_Catego %>%
+   filter(response_id == i)
+ 
+ print(ggplot(df_order, aes(x=Counting_Trial, y=RT)) +
+   geom_line() + 
+   xlab("")
+ )
+ 
+
+}
+
+
+a <- ggplot(df_Catego, aes(x=Counting_Trial, y=RT)) +
+   geom_line() + 
+   xlab("")
+
+
+```
+
+
+###
+
+```{r}
+
+RT_ModFinal_ThTo_02_Catego <- RT_ModFinal_ThTo_02
+Accuracy_ModFinal_ThTo_Catego <- Accuracy_ModFinal_ThTo
+
+save(RT_ModFinal_ThTo_02_Catego, file = "~/Psycho/Doctorat_Clermont/Procedures_ExP/FolkRemington_Etude1/Threat_SpatialCueing/Output/Models/Categorization_Task/RT_ThTo_Model_Catego.RData")
+
+save(Accuracy_ModFinal_ThTo_Catego, file = "~/Psycho/Doctorat_Clermont/Procedures_ExP/FolkRemington_Etude1/Threat_SpatialCueing/Output/Models/Categorization_Task/Acc_ThTo_Model_Catego.RData")
+
+
+save(RT_ModFinal_ThTo_02_Catego, file = "~/Psycho/Doctorat_Clermont/Ecriture de These/Chaptitres/Thesis_Bookdown/EnvironmentSaving/Part1_Menace/RT_ThTo_Model_Catego.RData")
+
+save(Accuracy_ModFinal_ThTo_Catego, file = "~/Psycho/Doctorat_Clermont/Ecriture de These/Chaptitres/Thesis_Bookdown/EnvironmentSaving/Part1_Menace/Acc_ThTo_Model_Catego.RData")
+
+```
+
+
+
+```{r Saving environment, eval = FALSE}
+
+save.image("~/Psycho/Doctorat_Clermont/Procedures_ExP/FolkRemington_Etude1/Threat_SpatialCueing/Environment saving/Task_Catego_2025-01-10.RData")
+
+save.image("~/Psycho/Doctorat_Clermont/Ecriture de These/Chaptitres/Thesis_Bookdown/EnvironmentSaving/Part1_Menace/Task_Catego_2025-01-10.RData")
+
+
+```

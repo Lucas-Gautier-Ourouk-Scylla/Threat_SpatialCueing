@@ -1,0 +1,947 @@
+---
+title: "Main_Analysis_Study1"
+author: "Ourouk Scylla Lucas Gautier"
+date: '2023-06-20'
+output: html_document
+---
+
+This script is the main analysis script for the project "Threat_Spatial Cueing" that study the impact of a threat on attention processes. It use a spatial cueing paradigm and want to replicate the results of Normand et al., (2014) of a reinforcement of the contingent attentional capture using the Threat of Screams paradigm instead of a self-evaluative threat.
+
+The OSf link of this project is available at: https://osf.io/jkt9m/
+
+
+```{r Knit options, include = FALSE}
+knitr::knit_hooks$set(
+   error = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
+           '</div>', sep = '\n')
+   },
+   warning = function(x, options) {
+     paste('\n\n<div class="alert alert-warning">',
+           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
+           '</div>', sep = '\n')
+   },
+   message = function(x, options) {
+     paste('\n\n<div class="alert alert-info">',
+           gsub('##', '\n', x),
+           '</div>', sep = '\n')
+   }
+)
+```
+
+# Set Up environments
+```{r Package Loading, include = FALSE}
+
+cat("\014") # clear console
+
+# Load packages
+
+# 4 lines : Installs (if necessary) and loads the packages you enter in the 1st row
+# 1st row : Creates a list of packages names that you want to use in the script (there is virtually no limit in how much package you can put here)
+# 2nd row : Creates a list of packages that have not been installed yet (new packages)
+# 3rd row : Installs the new packages
+# 4th row : Loads all the listed packages
+list.of.packages <- c("dplyr", "emmeans", "tidyverse", "readr", "psych", "lmerTest", "mice", "VIM", "missForest", "lavaan", "semPlot", "lattice")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+invisible(lapply(list.of.packages, require, character.only = TRUE))
+
+#rm(list=ls()) # clear workspace
+rm("list.of.packages", "new.packages")
+
+set.seed(42) # set overall random seed for reproducibility
+```
+
+# Aim of the script : 
+Run main analysis for the Threat_SpatialCueing project.
+
+
+# Open the dataframe
+
+```{r Opening file}
+
+df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv")
+
+# Transform participant ID in a factor
+df_Total$response_id <- factor(df_Total$response_id)
+
+df_Total$RT <- as.numeric(df_Total$RT)
+
+
+```
+
+
+# Build secondary dataframes
+
+Here, we build dataframes that only contains Response Time rows, we remove participants who have too many false answers, or bad response times based on our preregistration.
+
+## Survey removing
+
+
+```{r Survey Removing}
+
+tmp <- df <- df_Total
+
+tmp <- tmp %>%
+  filter(Check_Sound == 1)
+warning(paste0("We removed participants who said they did not hear any sounds during the experiment. The number of rows we removed is n = ", nrow(df[df$Check_Sound == 2, ]), ". The number of participants after this suppression is N = ", nlevels(factor(tmp$response_id))))
+
+
+df <- tmp
+
+rm(list=setdiff(ls(), c("df_Total", "df"))) # clear workspace except the dataframes
+
+```
+
+
+
+## Remove Sound rows
+
+```{r Sound rows removing}
+
+tmp <- df
+
+tmp <- tmp %>%
+  select(-c(Sound_Nb, Sound))
+
+tmp_Locate <- tmp %>%
+  filter(Task_Type_str  == "Localization")
+df_Locate <- tmp_Locate  
+
+
+tmp_Catego <- tmp %>%
+  filter(Task_Type_str  == "Categorization")
+df_Catego <- tmp_Catego
+
+
+tmp_Locate <- tmp_Locate %>% 
+  filter(Task == "Trial")
+warning(paste0("We have removed Sound rows in order to keep only Response times trial rows. For participants assigned to the Localization task, the number of rows we removed is n = ", table(df_Locate$Task)[[1]], " which means ",table(df_Locate$Task)[[1]]/nlevels(factor(df_Locate$response_id)) , " lines by participant."))
+
+tmp_Catego <- tmp_Catego %>% 
+  filter(Task == "Trial")
+warning(paste0("We have removed Sound rows in order to keep only Response times trial rows. For participants assigned to the Categorization task, the number of rows we removed is n = ", table(df_Catego$Task)[[1]], " which means ",table(df_Catego$Task)[[1]]/nlevels(factor(df_Catego$response_id)) , " lines by participant."))
+
+df_Locate <- tmp_Locate  
+df_Catego <- tmp_Catego
+
+rm(list=setdiff(ls(), c("df_Total", "df_Locate", "df_Catego"))) # clear workspace except the dataframes
+
+```
+
+
+```{r Participant Accuracy}
+
+Accuracy_Df <- df_Locate %>%
+  group_by(response_id) %>%
+  summarise(Accuracy=(length(which(Response_Status == 1))/length(response_id)), n=length(response_id))
+View(Accuracy_Df)
+
+hist(Accuracy_Df$Accuracy)
+
+```
+
+
+## Trial Removing: Incorrect and NoResponse trials
+
+```{r NoResponse}
+
+tmp_Locate <- df_Locate  
+tmp_Catego <- df_Catego
+
+## Localization Task
+tmp_Locate <- tmp_Locate %>%
+  filter(Response_Status == 1)
+
+## Categorization Task
+tmp_Catego <- tmp_Catego %>%
+  filter(Response_Status == 1)
+
+
+warning(paste0("We have removed participants trials without any respnse in the response time interval (<1500ms) or with incorrect answers. For participants assigned to the Localization task, the number of rows we removed for incorrect answer is n = ", table(df_Locate$Response_Status)[[2]], ", and the number of rows we removed for incorrect answer is n = ", table(df_Locate$Response_Status)[[3]], ". It means a total of n = ", (table(df_Locate$Response_Status)[[2]]+table(df_Locate$Response_Status)[[3]]), " removed rows."))
+
+warning(paste0("We have removed participants trials without any respnse in the response time interval (<1500ms) or with incorrect answers. For participants assigned to the Localization task, the number of rows we removed for incorrect answer is n = ", table(df_Catego$Response_Status)[[2]], ", and the number of rows we removed for incorrect answer is n = ", table(df_Catego$Response_Status)[[3]], ". It means a total of n = ", (table(df_Catego$Response_Status)[[2]]+table(df_Catego$Response_Status)[[3]]), " removed rows."))
+
+df_Locate <- tmp_Locate  
+df_Catego <- tmp_Catego
+
+rm(list=setdiff(ls(), c("df_Total", "df_Locate", "df_Catego"))) # clear workspace except the dataframes
+
+```
+
+### Quintile dataframes
+####Localization
+
+```{r Quintile dataframes}
+
+df_Locate$RT <- as.numeric(df_Locate$RT)
+
+# Remove Training trials
+tmp <- df_Locate %>%
+  filter(Block != "Training") 
+
+# Remove Neutral trials
+tmp <- tmp %>%
+  filter(Congruency != "NoCongruency")
+
+# recode variables
+
+tmp$Congruency_C <- -0.5*(tmp$Congruency =="Incongruent") + 0.5*(tmp$Congruency =="Congruent")
+tmp$Validity_C <- -0.5*(tmp$Cueing_Validity =="Invalid") + 0.5*(tmp$Cueing_Validity =="Valid")
+tmp$Condition_C <- +0.5*(tmp$Block =="Threat") + -0.5*(tmp$Block =="Control")
+
+df_Locate <- tmp
+warning("This script have been put here but also exist in other chunks....")
+
+df_Locate_Q1 <- df_Locate %>%
+  group_by(response_id) %>%
+  filter(RT >= quantile(as.numeric(df_Locate$RT), 0) & RT <= quantile(as.numeric(df_Locate$RT), 0.2))
+
+# Group the data by participant and trial types, and calculate the first quintile
+df_Locate_Q1bis <- df_Locate %>%
+  group_by(response_id, Validity_C, Congruency_C) %>%
+  mutate(quintile = ntile(RT, 5)) %>%
+  filter(quintile == 1) %>%
+  ungroup()
+
+df_Locate_Q2 <- df_Locate %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Locate$RT), 0.2) & RT <= quantile(as.numeric(df_Locate$RT), 0.4))
+
+# Group the data by participant and trial types, and calculate the first quintile
+df_Locate_Q2bis <- df_Locate %>%
+  group_by(response_id, Validity_C, Congruency_C) %>%
+  mutate(quintile = ntile(RT, 5)) %>%
+  filter(quintile == 2) %>%
+  ungroup()
+
+df_Locate_Q3 <- df_Locate %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Locate$RT), 0.4) & RT <= quantile(as.numeric(df_Locate$RT), 0.6))
+
+# Group the data by participant and trial types, and calculate the first quintile
+df_Locate_Q3bis <- df_Locate %>%
+  group_by(response_id, Validity_C, Congruency_C) %>%
+  mutate(quintile = ntile(RT, 5)) %>%
+  filter(quintile ==3) %>%
+  ungroup()
+
+df_Locate_Q4 <- df_Locate %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Locate$RT), 0.6) & RT <= quantile(as.numeric(df_Locate$RT), 0.8))
+
+# Group the data by participant and trial types, and calculate the first quintile
+df_Locate_Q4bis <- df_Locate %>%
+  group_by(response_id, Validity_C, Congruency_C) %>%
+  mutate(quintile = ntile(RT, 5)) %>%
+  filter(quintile == 4) %>%
+  ungroup()
+
+df_Locate_Q5 <- df_Locate %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Locate$RT), 0.8) & RT <= quantile(as.numeric(df_Locate$RT), 0.97))
+
+# Group the data by participant and trial types, and calculate the first quintile
+df_Locate_Q5bis <- df_Locate %>%
+  group_by(response_id, Validity_C, Congruency_C) %>%
+  mutate(quintile = ntile(RT, 5)) %>%
+  filter(quintile == 5) %>%
+  ungroup()
+warning("There is a problème on this quintile separation with the fifth quintile...")
+
+
+ifelse(identical(nrow(df_Locate),(nrow(df_Locate_Q1bis)+nrow(df_Locate_Q2bis)+nrow(df_Locate_Q3bis)+nrow(df_Locate_Q4bis)+nrow(df_Locate_Q5bis)))==TRUE, ("The number of participants in the overall dataframe match the number of participants in each quintile dataframe"),("Warning: The number of participants in the overall dataframe do not match the number of participants in each quintile dataframe"))
+
+
+
+```
+
+### Quintile dataframes
+#### Categorization
+
+```{r Quintile dataframes}
+
+df_Catego$RT <- as.numeric(df_Catego$RT)
+
+# Remove Training trials
+tmp <- df_Catego %>%
+  filter(Block != "Training") 
+
+# Remove Neutral trials
+tmp <- tmp %>%
+  filter(Congruency != "NoCongruency")
+
+# recode variables
+
+tmp$Congruency_C <- -0.5*(tmp$Congruency =="Incongruent") + 0.5*(tmp$Congruency =="Congruent")
+tmp$Validity_C <- -0.5*(tmp$Cueing_Validity =="Invalid") + 0.5*(tmp$Cueing_Validity =="Valid")
+tmp$Condition_C <- +0.5*(tmp$Block =="Threat") + -0.5*(tmp$Block =="Control")
+
+df_Catego <- tmp
+warning("This script have been put here but also exist in other chunks....")
+
+df_Catego_Q1 <- df_Catego %>%
+  group_by(response_id) %>%
+  filter(RT >= quantile(as.numeric(df_Catego$RT), 0) & RT <= quantile(as.numeric(df_Catego$RT), 0.2))
+
+df_Catego_Q2 <- df_Catego %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Catego$RT), 0.2) & RT <= quantile(as.numeric(df_Catego$RT), 0.4))
+
+df_Catego_Q3 <- df_Catego %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Catego$RT), 0.4) & RT <= quantile(as.numeric(df_Catego$RT), 0.6))
+
+df_Catego_Q4 <- df_Catego %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Catego$RT), 0.6) & RT <= quantile(as.numeric(df_Catego$RT), 0.8))
+
+df_Catego_Q5 <- df_Catego %>%
+  group_by(response_id) %>%
+  filter(RT > quantile(as.numeric(df_Catego$RT), 0.8) & RT <= quantile(as.numeric(df_Catego$RT), 0.97))
+warning("There is a problème on this quintile separation with the fifth quintile...")
+
+
+ifelse(identical(nrow(df_Catego),(nrow(df_Catego_Q1)+nrow(df_Catego_Q2)+nrow(df_Catego_Q3)+nrow(df_Catego_Q4)+nrow(df_Catego_Q5)))==TRUE, ("The number of participants in the overall dataframe match the number of participants in each quintile dataframe"),("Warning: The number of participants in the overall dataframe do not match the number of participants in each quintile dataframe"))
+
+
+
+```
+
+
+## Mad removing
+
+```{r Mad removing}
+
+tmp_Locate <- df_Locate  
+tmp_Catego <- df_Catego
+
+## Localization Task
+
+Median_Locate <- median(as.numeric(tmp_Locate$RT))
+Mad_tmp_Locate <- mad(as.numeric(tmp_Locate$RT))
+Mad_Before_Locate <- nrow(tmp_Locate)
+
+tmp_Locate <- tmp_Locate %>%
+  mutate(RT = as.numeric(RT)) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT)))
+
+Mad_After_Locate <- nrow(tmp_Locate)
+Mad_Exclusion_Locate <- Mad_Before_Locate - Mad_After_Locate
+
+
+## Categorization Task
+
+Median_Catego <- median(as.numeric(tmp_Catego$RT))
+Mad_tmp_Catego <- mad(as.numeric(tmp_Catego$RT))
+Mad_Before_Catego <- nrow(tmp_Catego)
+
+tmp_Catego <- tmp_Catego %>%
+  mutate(RT = as.numeric(RT)) %>%
+  filter((RT >= median(RT)-3*mad(RT)) & (RT <= median(RT)+3*mad(RT)))
+
+Mad_After_Catego <- nrow(tmp_Catego)
+Mad_Exclusion_Catego <- Mad_Before_Catego - Mad_After_Catego
+
+
+
+warning(paste0("We have removed participants response time < or > to 3 mad. For participants assigned to the Localization task, the number of rows we removed is n = ", Mad_Exclusion_Locate, " whith means 3 times  ", Mad_tmp_Locate , " around the median: ", Median_Locate))
+
+warning(paste0("We have removed participants response time < or > to 3 mad. For participants assigned to the Categorization task, the number of rows we removed is n = ", Mad_Exclusion_Catego, " whith means 3 times  ", Mad_tmp_Catego , " around the median: ", Median_Catego))
+
+
+#sum(((df$RT >= median(df$RT)-3*mad(df$RT)) & (df$RT <= median(df$RT)+3*mad(df$RT)))==FALSE)
+
+df_Locate_Mad <- tmp_Locate
+df_Catego_Mad <- tmp_Catego
+
+rm(list=setdiff(ls(), c("df_Total", "df_Locate", "df_Catego", "df_Locate_Mad", "df_Catego_Mad"))) # clear workspace except the dataframes
+
+
+```
+
+
+# Main analysis
+
+## Localization task
+
+### Means
+
+```{r Means Localiation}
+
+df_Locate <- df_Locate %>%
+  filter(Block != "Training") 
+
+df_Locate_Mad <- df_Locate_Mad %>%
+  filter(Block != "Training") 
+
+# Mean by condition
+Mean1 <- df_Locate_Mad %>% 
+  group_by(Block) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))), n=length(response_id))
+view(Mean1)
+
+# Graphic representation
+ggplot(Mean1, aes(x = Block, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1) +
+  geom_line() +
+  xlab("Condition") +
+  ylab("Response time")
+
+# Mean by condition*Congruency*Validity
+Mean2 <- df_Locate %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))),  n=length(response_id))
+view(Mean2)
+
+# If we run the same analysis but after removing rows >3Mad
+Mean2Mad <- df_Locate_Mad %>% 
+  group_by(Block, Congruency, Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), se=(sd(RT)/sqrt(length(response_id))),  n=length(response_id))
+view(Mean2Mad)
+
+# Graphic representation
+ggplot(Mean2, aes(x = Block, y = mean, color = Cueing_Validity, linetype = Congruency, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(,position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Response time") +
+  scale_color_manual(values = c("red", "black", "green4"), guide = guide_legend(title = "Cueing_Validity")) +
+  scale_linetype_manual(values = c("solid", "52", "22"), guide = guide_legend(title = "Congruency"))
+
+# If we run the same analysis but after removing rows >3Mad
+ggplot(Mean2Mad, aes(x = Block, y = mean, color = Cueing_Validity, linetype = Congruency, group = interaction(Cueing_Validity, Congruency))) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.1, position = position_dodge(width = 0.2)) +
+  geom_line(,position = position_dodge(width = 0.2)) +
+  xlab("Condition") +
+  ylab("Response time") +
+    scale_color_manual(values = c("red", "black", "green4"), guide = guide_legend(title = "Cueing_Validity")) +
+  scale_linetype_manual(values = c("solid", "52", "22"), guide = guide_legend(title = "Congruency"))
+
+
+
+# tmp_NoCue <- df_Locate %>%
+#   filter(Block != "Training") %>%
+#   filter(Congruency == "NoCongruency")
+# tmp_NoCue$Condition_C <- +0.5*(tmp_NoCue$Block =="Threat") -0.5*(tmp_NoCue$Block =="Toon") + -0.5*(tmp_NoCue$Block =="Control")
+# 
+# lmer0 <- lmer(RT ~ Condition_C 
+#               + (Condition_C| response_id),
+#               data = tmp_NoCue)
+# 
+# summary(lmer0)
+
+Ppt_Nb_row <- df_Locate_Q1 %>% 
+  group_by(response_id, Block, Congruency, Cueing_Validity) %>%
+  summarise(mean=mean(RT), sd=sd(RT), n=length(response_id))
+
+```
+
+
+
+### 3 way interaction
+#### Localization
+
+```{r Localization: 3 way interaction}
+nlevels(factor(df_Locate$response_id))
+
+# Define linear mixed model
+
+lmer1 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate)
+
+summary(lmer1)
+
+tmp_Locate_Residuals <- df_Locate %>%
+  filter(Congruency != "NoCongruency") %>%
+  mutate(Hat = hatvalues(lmer1)) %>%
+  mutate(Rstud = rstudent(lmer1))%>%
+  mutate(Cook = cooks.distance(lmer1))
+
+tmp_Locate_Residuals_Rm <- tmp_Locate_Residuals %>%
+  filter(Rstud <= 3 & Rstud >= -3) %>%
+  filter(Hat <= .10) %>%
+  filter(Cook <= .10)
+
+tmp_Locate_Residuals_Rm$Congruency_C <- -0.5*(tmp_Locate_Residuals_Rm$Congruency =="Incongruent") + 0.5*(tmp_Locate_Residuals_Rm$Congruency =="Congruent")
+tmp_Locate_Residuals_Rm$Validity_C <- -0.5*(tmp_Locate_Residuals_Rm$Cueing_Validity =="Invalid") + 0.5*(tmp_Locate_Residuals_Rm$Cueing_Validity =="Valid")
+tmp_Locate_Residuals_Rm$Condition_C <- +0.5*(tmp_Locate_Residuals_Rm$Block =="Threat") + -0.5*(tmp_Locate_Residuals_Rm$Block =="Control")
+
+lmer1_WResid <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp_Locate_Residuals_Rm)
+
+summary(lmer1_WResid)
+
+
+### With the Mad dataframe
+
+tmp_Locate_Mad <- df_Locate_Mad %>%
+  filter(Congruency != "NoCongruency")
+
+tmp_Locate_Mad$Congruency_C <- -0.5*(tmp_Locate_Mad$Congruency =="Incongruent") + 0.5*(tmp_Locate_Mad$Congruency =="Congruent")
+tmp_Locate_Mad$Validity_C <- -0.5*(tmp_Locate_Mad$Cueing_Validity =="Invalid") + 0.5*(tmp_Locate_Mad$Cueing_Validity =="Valid")
+tmp_Locate_Mad$Condition_C <- +0.5*(tmp_Locate_Mad$Block =="Threat") + -0.5*(tmp_Locate_Mad$Block =="Control")
+
+lmer1_Mad <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp_Locate_Mad)
+
+summary(lmer1_Mad)
+
+tmp_Locate_Mad_Residuals <- df_Locate_Mad %>%
+  filter(Congruency != "NoCongruency") %>%
+  mutate(Hat = hatvalues(lmer1_Mad)) %>%
+  mutate(Rstud = rstudent(lmer1_Mad))%>%
+  mutate(Cook = cooks.distance(lmer1_Mad))
+
+tmp_Locate_Mad_Residuals_Rm <- tmp_Locate_Mad_Residuals %>%
+  filter(Rstud <= 3 & Rstud >= -3) %>%
+  filter(Hat <= .10) %>%
+  filter(Cook <= .10)
+
+tmp_Locate_Mad_Residuals_Rm$Congruency_C <- -0.5*(tmp_Locate_Mad_Residuals_Rm$Congruency =="Incongruent") + 0.5*(tmp_Locate_Mad_Residuals_Rm$Congruency =="Congruent")
+tmp_Locate_Mad_Residuals_Rm$Validity_C <- -0.5*(tmp_Locate_Mad_Residuals_Rm$Cueing_Validity =="Invalid") + 0.5*(tmp_Locate_Mad_Residuals_Rm$Cueing_Validity =="Valid")
+tmp_Locate_Mad_Residuals_Rm$Condition_C <- +0.5*(tmp_Locate_Mad_Residuals_Rm$Block =="Threat") + -0.5*(tmp_Locate_Mad_Residuals_Rm$Block =="Control")
+
+lmer1_Mad_WResid <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp_Locate_Mad_Residuals_Rm)
+
+summary(lmer1_Mad_WResid)
+
+
+## Removing Toon trials
+tmp_Locate_Mad_Residuals_Rm_NoToon <- tmp_Locate_Mad_Residuals_Rm %>%
+    filter(Block != "Toon")
+
+
+lmer1_Mad_WResid_NoToon <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp_Locate_Mad_Residuals_Rm_NoToon)
+
+summary(lmer1_Mad_WResid_NoToon)
+
+## Removing Control trials
+tmp_Locate_Mad_Residuals_Rm_NoCtrl <- tmp_Locate_Mad_Residuals_Rm %>%
+    filter(Block != "Control")
+
+
+lmer1_Mad_WResid_NoCtrl <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp_Locate_Mad_Residuals_Rm_NoCtrl)
+
+summary(lmer1_Mad_WResid_NoCtrl)
+
+
+# df_Recod$Levier_Anova_ControlInduction<-hatvalues(Anova_ControlInduction) # Calculate the hat values for each ppt
+# df_Recod$ResidStudent_Anova_ControlInduction<-rstudent(Anova_ControlInduction) # Calculate the student residuals for each ppt : it could reaveal a problem beacause some score are higher than 3
+# df_Recod$Cook_Anova_ControlInduction<-cooks.distance(Anova_ControlInduction) # Calculate the Cooks distance for each ppt
+
+ranef(lmer1)
+coef(lmer1)
+
+xyplot(RT~Fear_Score| response_id, data=tmp, ylab="Response Time", type=c("p","r","g"),layout = c(3,3,31))
+
+qqmath(~RT|response_id,data=tmp,layout = c(3,3,4))
+qqmath(~RT|Target_Type,data=tmp,layout = c(2,1,1))
+
+qqnorm(residuals(lmer1))
+dotplot(ranef(lmer1))
+
+qqmath(ranef(lmer1))
+plot(lmer1) # ou plot(fitted(fitA.lmer),residuals(fitA.lmer))
+
+
+
+```
+
+### Main hypothesis by quintile
+#### Localization
+
+```{r Localization: 3 way interaction by quintile}
+
+
+lmer1_Q1 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q1)
+
+summary(lmer1_Q1)
+
+
+lmer1_Q2 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q2)
+
+summary(lmer1_Q2)
+
+lmer1_Q3 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q3)
+
+summary(lmer1_Q3)
+
+lmer1_Q4 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q4)
+
+summary(lmer1_Q4)
+
+lmer1_Q5 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q5)
+
+summary(lmer1_Q5)
+
+
+lmer1_Q1bis <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q1bis)
+
+summary(lmer1_Q1bis)
+
+lmer1_Q2bis <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q2bis)
+
+summary(lmer1_Q2bis)
+
+lmer1_Q3bis <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q3bis)
+
+summary(lmer1_Q3bis)
+
+lmer1_Q4bis <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q4bis)
+
+summary(lmer1_Q4bis)
+
+lmer1_Q5bis <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Locate_Q5bis)
+
+summary(lmer1_Q5bis)
+
+```
+
+
+
+### 3 way interaction
+#### Categorization
+
+```{r Categorization: 3 way interaction}
+
+# Remove Training trials
+tmp2 <- df_Catego %>%
+  filter(Block != "Training") 
+
+# Remove Neutral trials
+tmp2 <- tmp2 %>%
+  filter(Congruency != "NoCongruency")
+
+# recode variables
+
+tmp2$Congruency_C <- -0.5*(tmp2$Congruency =="Incongruent") + 0.5*(tmp2$Congruency =="Congruent")
+tmp2$Validity_C <- -0.5*(tmp2$Cueing_Validity =="Invalid") + 0.5*(tmp2$Cueing_Validity =="Valid")
+tmp2$Condition_C <- +0.5*(tmp2$Block =="Threat") + -0.5*(tmp2$Block =="Control")
+
+# Define linear mixed model
+
+lmer2 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = tmp2)
+
+summary(lmer2)
+
+
+
+
+```
+
+
+```{r Categorization: 3 way interaction by quintile}
+
+
+lmer2_Q1 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Catego_Q1)
+
+summary(lmer2_Q1)
+
+lmer2_Q2 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Catego_Q2)
+
+summary(lmer2_Q2)
+
+lmer2_Q3 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Catego_Q3)
+
+summary(lmer2_Q3)
+
+lmer2_Q4 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Catego_Q4)
+
+summary(lmer2_Q4)
+
+lmer2_Q5 <- lmer(RT ~ Congruency_C * Validity_C * Condition_C 
+              + (Congruency_C*Validity_C*Condition_C| response_id),
+              data = df_Catego_Q5)
+
+summary(lmer2_Q5)
+
+```
+
+### EFfect of anxiety level on the contingent capture
+
+#### Localization task
+
+```{r EFfect of anxiety level on the contingent }
+# Remove Training trials
+tmp <- df_Locate %>%
+  filter(Block != "Training") 
+
+# Remove Neutral trials
+tmp <- tmp %>%
+  filter(Congruency != "NoCongruency")
+
+# recode variables
+
+tmp$Congruency_C <- -0.5*(tmp$Congruency =="Incongruent") + 0.5*(tmp$Congruency =="Congruent")
+tmp$Validity_C <- -0.5*(tmp$Cueing_Validity =="Invalid") + 0.5*(tmp$Cueing_Validity =="Valid")
+tmp$Condition_C <- +0.5*(tmp$Block =="Threat") + -0.5*(tmp$Block =="Control")
+
+# Define linear mixed model
+
+lmer3 <- lmer(RT ~ Congruency_C * Validity_C * Fear_Score 
+              + (Congruency_C*Validity_C*Fear_Score| response_id),
+              data = tmp)
+
+summary(lmer3)
+ranef(lmer3)
+
+
+tmp_NoToon <- tmp %>%
+  filter(Block != "Toon")
+
+# Effect of condition on Fear_Score
+lmer3bis <- lmer(Fear_Score ~ Condition_C 
+              + (Condition_C| response_id),
+              data = tmp)
+
+summary(lmer3bis)
+ranef(lmer3bis)
+
+
+lm3 <- lm(RT ~ Congruency_C * Validity_C * Fear_Score,
+              data = tmp)
+
+summary(lm3)
+
+lm3_NoToon <- lm(RT ~ Congruency_C * Validity_C * Fear_Score,
+              data = tmp_NoToon)
+
+summary(lm3_NoToon)
+
+
+
+
+```
+
+```{r}
+tmp_Full <- rbind(df_Locate, df_Catego)
+nlevels(factor(tmp_Full$response_id))
+
+
+lmer4 <- lmer(RT ~ Counting_Trial * Task_Type_str 
+              + (Counting_Trial * Task_Type_str|response_id), data = tmp_Full)
+
+summary(lmer4)
+
+```
+
+
+```{r}
+tmp_Full <- rbind(df_Locate, df_Catego)
+nlevels(factor(tmp_Full$response_id))
+
+tmp_Full$Condition_C <- +0.5*(tmp_Full$Block =="Threat") + -0.5*(tmp_Full$Block =="Control")
+
+
+lmer5 <- lmer(as.numeric(RT) ~ Condition_C * Task_Type_str 
+              + (Condition_C * Task_Type_str|response_id), data = tmp_Full)
+
+summary(lmer5)
+```
+
+
+```{r}
+
+tmp_Mad <- df_Locate_Mad %>%
+  filter(Block != "Training")
+
+lmer6 <- lmer(RT ~ Fear_Score 
+              + (Fear_Score| response_id),
+              data = tmp_Mad)
+
+summary(lmer6)
+# Ajouter (Counting_Trial) au modèle rend signif l'effet de la peur... 
+
+tmp_Mad_Threat <- df_Locate_Mad %>%
+  filter(Block == "Threat")
+
+lmer6_Threat <- lmer(RT ~ Fear_Score 
+              + (Fear_Score| response_id),
+              data = tmp_Mad_Threat)
+
+summary(lmer6_Threat)
+```
+
+
+```{r Examples}
+
+df_Locate$response_id <- factor(df_Locate$response_id)
+
+xtabs(~response_id+Congruency,df_Locate)
+
+lmer()
+summary()
+ranef()
+coef()
+
+
+qqmath(~y|pp,data=DF,layout = c(3,3,4))
+qqmath(~y|stim,data=DF,layout = c(3,3,4))
+
+qqnorm(residuals(fitA.lmer))
+qqmath(ranef(fitA.lmer))
+plot(fitA.lmer) # ou plot(fitted(fitA.lmer),residuals(fitA.lmer))
+
+
+
+
+xyplot(RT~Congruency|response_id, data=df_Locate, ylab="Response Time", type=c("p","r","g"),layout = c(3,3,4))
+xylowess.fnc(y ~ Condc | pp, data = DF, ylab = "Jugement",layout = c(3,3,4))
+dotplot(ranef(fitA.lmer, condVar = TRUE))
+# package lattice et langageR
+
+#Pour comparer des modèles :
+anova(fitA.lmer,fitC.lmer)
+
+# Pour savoir si surspécifié:
+summary(rePCA(m0))
+
+VarCorr(m1) # => extrait seulement les variances de “summary”
+
+
+
+```
+
+# Effets du PTSD sur l'anxieté à la suite des condition expérimentale
+
+```{r PTSD on Anxiety}
+
+warning("Ici j'ai fait mes regression avec Fear_Score mais ça donne des trucs un peu differents sur la régression avec PTSD par rapport à si j'utilise Fear_Mean. Le problème vient peut-être du fait que j'ai fait une erreur dans le calcul du Fear_Mean_Pretest que je dois corriger avant de continuer tout ça...")
+
+Short_df <- df %>%
+  filter(Block == "Control" | Block == "Threat" | Block == "Toon") %>%
+  group_by(response_id, Block) %>%
+  slice(1) %>%
+  ungroup()
+
+# Build a difference score between pretest and anxiety after each block
+Short_df$AnxietyDiff <- Short_df$Fear_Score - Short_df$Fear_Score_Pretest
+Short_df$PTSD_Diag_ct <- -0.5*(Short_df$PTSD_Diag =="NoDiag") + 0.5*(Short_df$PTSD_Diag =="Diag")
+
+
+# Link between PTSD and Anxiety at the beginning of experiment
+cor.test(Short_df$PTSD_Score, Short_df$Fear_Score_Pretest) 
+summary(lm(Fear_Score_Pretest~PTSD_Score, data = Short_df))
+summary(lm(Fear_Score_Pretest~PTSD_Diag, data = Short_df))
+
+# Predict the effect of experimental manipulation (Threat) on anxiety with PTSD_Diag
+AnxietyThreat <- Short_df %>%
+  filter(Block == "Threat")
+summary(lm(AnxietyDiff~PTSD_Diag_ct, data = AnxietyThreat))
+# Ca veut dire que le fait d'avoir été diagnostiqué PTSD engendre un moins grand effet des cris sur l'anxiété ressentie
+
+ggplot(AnxietyThreat, aes(x = Fear_Score_Pretest, y = Fear_Score, color = PTSD_Diag)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  xlab("Fear_Score_Pretest") +
+  ylab("Fear_Score") +
+  labs(color = "PTSD_Diag")
+
+# Predict the effect of experimental manipulation (Threat) on anxiety for non-diagnosed pptEs
+AnxietyThreat <- Short_df %>%
+  filter(Block == "Threat") %>%
+  filter(PTSD_Diag =="NoDiag")
+summary(lm(AnxietyDiff~1, data = AnxietyThreat))
+
+# Predict the effect of experimental manipulation (Threat) on anxiety for diagnosed pptEs
+AnxietyThreat <- Short_df %>%
+  filter(Block == "Threat") %>%
+  filter(PTSD_Diag =="Diag")
+summary(lm(AnxietyDiff~1, data = AnxietyThreat)) # This result is so WEIRD !!!
+
+
+
+```
+
+
+
+### Supplementary
+
+##### ANalyse de la latéralité
+
+```{r Laterality}
+
+df_Locate <- df_Locate %>% mutate(Laterality = case_when(Target_Position == "top" ~ "Vertical",
+                                                         Target_Position == "bottom" ~ "Vertical",
+                                                         Target_Position == "right" ~ "Horizontal",
+                                                         Target_Position == "left" ~ "Horizontal",)) %>%
+  mutate(Laterality_Cod = case_when(Laterality == "Vertical" ~ -0.5, 
+                                    Laterality == "Horizontal" ~ +0.5))
+
+df_Locate$RT <- as.numeric(df_Locate$RT)
+
+df_Catego <- df_Catego %>% mutate(Laterality = case_when(Target_Position == "top" ~ "Vertical",
+                                                         Target_Position == "bottom" ~ "Vertical",
+                                                         Target_Position == "right" ~ "Horizontal",
+                                                         Target_Position == "left" ~ "Horizontal",))%>%
+  mutate(Laterality_Cod = case_when(Laterality == "Vertical" ~ -0.5, 
+                                    Laterality == "Horizontal" ~ +0.5))
+
+df_Catego$RT <- as.numeric(df_Catego$RT)
+
+
+lmer_Laterality_Locate <- lmer(RT ~ Laterality_Cod 
+              + (Laterality_Cod | response_id),
+              data = df_Locate)
+summary(lmer_Laterality_Locate)
+# Les gens répondent plus rapidement sur les touches horizontales que verticales en tâche de localization
+
+lmer_Laterality_Catego <- lmer(RT ~ Laterality_Cod 
+              + (Laterality_Cod | response_id),
+              data = df_Catego)
+summary(lmer_Laterality_Catego)
+# Les gens répondent plus rapidement sur les touches horizontales que verticales en tâche de categorisation
+
+
+```
+
+
+
+
+
+
+
