@@ -84,7 +84,7 @@ source('funcs/fun_panel.R')
 ```{r Open file}
 
 # Open the dataframe
-df_Total_Survey <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+df_Total_Survey <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
   select(-"...1") %>%
   filter(Block == "Threat" | Block == "Toon" |  Block == "Control")
 

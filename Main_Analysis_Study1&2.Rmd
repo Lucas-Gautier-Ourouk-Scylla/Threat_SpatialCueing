@@ -61,7 +61,7 @@ Run main analysis for the Threat_SpatialCueing project.
 
 ```{r Opening file}
 
-df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv")
+df_Total <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv")
 
 # Transform participant ID in a factor
 df_Total$response_id <- factor(df_Total$response_id)

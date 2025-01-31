@@ -1,6 +1,6 @@
 # Open the dataframe
 
-df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+df_Total <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
   select(-"...1")
 
 

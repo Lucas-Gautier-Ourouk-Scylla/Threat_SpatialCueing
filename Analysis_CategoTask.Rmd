@@ -33,40 +33,17 @@ Contrary to our preregistration, we run our analysis not on the factorial score 
 
 # Option settings and data loading
 
-## Knit options
-
-```{r setup}
-
-knitr::opts_chunk$set(message = FALSE, 
-                      warning = FALSE)
-
-knitr::knit_hooks$set(
-   error = function(x, options) {
-     paste('\n\n<div class="alert alert-danger">',
-           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
-           '</div>', sep = '\n')
-   },
-   warning = function(x, options) {
-     paste('\n\n<div class="alert alert-warning">',
-           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
-           '</div>', sep = '\n')
-   },
-   message = function(x, options) {
-     paste('\n\n<div class="alert alert-info">',
-           gsub('##', '\n', x),
-           '</div>', sep = '\n')
-   }
-)
-
-```
 
 ## Package loading
 
 ```{r Package loading}
 
+knitr::opts_chunk$set(message = FALSE, 
+                      warning = FALSE)
+
 require(pacman)
 
-p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, party, pdp, psych, lmerTest, mice, VIM, missForest, lavaan, semPlot, lattice, sjPlot, broom.mixed, buildmer, performance, insight, MVN, ggplot2)
+p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, party, pdp, psych, lmerTest, mice, VIM, missForest, lavaan, semPlot, lattice, sjPlot, broom.mixed, performance, insight, MVN, ggplot2)
 
 ```
 
@@ -76,7 +53,7 @@ p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, 
 
 # Open the dataframe
 
-df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+df_Total <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
   select(-"...1")
 
 
@@ -1672,8 +1649,8 @@ Visual inspection of residuals tend to correct a bit the problem of non-normalit
 
 Here, we remove trials reflecting outliers in terms of Studentized residuals, hat values and cook distance. For that we removed rows with : 
     - Studentized residuals > 3 or Studentized residuals < -3
-    - Hat values > .020 (its a relative threshold based on histogram and visual inspection of these values)
-    - Cook distance > .020 (its a relative threshold based on histogram and visual inspection of these values)
+    - Hat values > .030 (its a relative threshold based on histogram and visual inspection of these values)
+    - Cook distance > .032 (its a relative threshold based on histogram and visual inspection of these values)
     
 
 ###### RT Prediction
@@ -2719,9 +2696,9 @@ These effects of anxiety and its interaction with cue validity on response time 
 
 
 
-## Old analysis and results reporting
+## Old analysis
 
-The second effet is more interesting and show that the more participants feel threatened by screams the faster they respond on the categorisation task. Here is a graphic representation of this effect: 
+An effet show that the more participants feel threatened by screams the faster they respond on the categorisation task. Here is a graphic representation of this effect: 
 
 ```{r RT Interaction Scream Anxiety, include = FALSE}
 
@@ -2762,20 +2739,36 @@ plot_model(RT_Int_ThreatScreams_Anxiety, type = "pred", terms = c("Evol_Anxiety_
 
 
 
+## Training effect
+
+
+```{r Training effect}
+
+Lmer_time <- lmer(RT ~ Counting_Trial + (1|response_id), data = df_Catego_Prereg_Excl)
+
+summary(Lmer_time)
+model_performance(Lmer_time)
+
+dotplot(ranef(Lmer_time))
+
+VarCorr(Lmer_time)
+summary(rePCA(Lmer_time))
+```
+
+
+```{r graph Training effect}
+
+
+plot_model(Lmer_time, type = "slope")
+
+```
 
 
 
 
 
 
-
-
-
-
-
-
-
-
+## Sequential graphic representation of RT by participant
 
 
 ```{r Sequential representation of RT, eval = FALSE}
@@ -2804,9 +2797,9 @@ a <- ggplot(df_Catego, aes(x=Counting_Trial, y=RT)) +
 ```
 
 
-###
+## Savings
 
-```{r}
+```{r Saving models Catego}
 
 RT_ModFinal_ThTo_02_Catego <- RT_ModFinal_ThTo_02
 Accuracy_ModFinal_ThTo_Catego <- Accuracy_ModFinal_ThTo

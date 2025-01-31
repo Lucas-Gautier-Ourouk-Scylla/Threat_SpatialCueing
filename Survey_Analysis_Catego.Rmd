@@ -37,32 +37,6 @@ Contrary to our preregistration, we run our analysis not on the factorial score 
 
 # Option settings and data loading
 
-## Knit options
-
-```{r setup}
-
-knitr::opts_chunk$set(message = FALSE, 
-                      warning = FALSE)
-
-knitr::knit_hooks$set(
-   error = function(x, options) {
-     paste('\n\n<div class="alert alert-danger">',
-           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
-           '</div>', sep = '\n')
-   },
-   warning = function(x, options) {
-     paste('\n\n<div class="alert alert-warning">',
-           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
-           '</div>', sep = '\n')
-   },
-   message = function(x, options) {
-     paste('\n\n<div class="alert alert-info">',
-           gsub('##', '\n', x),
-           '</div>', sep = '\n')
-   }
-)
-
-```
 
 ## Package loading
 
@@ -84,7 +58,7 @@ source('funcs/fun_panel.R')
 ```{r Open file}
 
 # Open the dataframe
-df_Total_Survey <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+df_Total_Survey <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
   select(-"...1") %>%
   filter(Block == "Threat" | Block == "Toon" |  Block == "Control")
 
@@ -162,7 +136,6 @@ df_Survey_Long_4var <- dplyr::left_join(df_Survey_Long_4var, df_Survey_Long_4var
 rm(tmp, Factor_Variables, df_Survey_Long_4var_bis)
 
 
-warning("In the final dataframes, we have removed participants who reported not having hear sound during the experiment since these sounds are a critical aspect of this experiment")
 
 ```
 
@@ -349,8 +322,6 @@ Evol_lm03_Catego <- lm(Evol_Toon_Mean ~ 1, data = df_Survey_Wide_Catego)
 summary(Evol_lm03_Catego)
 Report_Evol_lm03_Catego <- summary(Evol_lm03_Catego)
 
-
-warning("Results change if we take the facorial score (e.g., Evol_Threat_Bart) instead of the mean. In this case, in comparison to the pretest, participants tend to report less anxiety after the control block and marginally less after the toon block")
 
 
 ```
@@ -842,6 +813,8 @@ plot_model(Anxiety_Vocaliz_lm01_Catego, type = "slope")
 
 ```
 
+
+## Savings
 
 ```{r Saving environment, eval = FALSE}
 

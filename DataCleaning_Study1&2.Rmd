@@ -1,5 +1,5 @@
 ---
-title: "DataCleaning_Study1"
+title: "DataCleaning_Study1 & Study 2"
 author: "Ourouk Scylla Lucas Gautier"
 date: '2023-06-19'
 output: html_document
@@ -104,19 +104,17 @@ The total number of participants before exclusion is N = `r (nlevels(df$response
 
 Experiment CodeBook
 
-- Ppt_Response_Nb: The response given by the participant in terms of number (1=g, 2=b, 3=h, 4=y)
+- Ppt_Response_Nb: The response given by the participant in terms of number (for the localization task: 1=g, 2=b, 3=h, 4=y; for the categorization task: 1=b, 2=n)
 
-- Ppt_Response: The response given by the participant (g, b, h or y) in the location task
+- Ppt_Response: The response given by the participant (localization: g, b, h or y; categorization: b, n)
 
 - Ppt: The name of participant experiment file
 
 - response_id: The number of each participant
 
-- Catego_Key_Response: the theoretical correct response key for the same task with a 
+- Catego_Key_Response: the theoretical correct response key for the same task with a categorization instruction (b or n)
 
-categorization instruction (b or n)
-
-- Key_Response_Nb: The correct response for the localization task in terms of number (1=g, 2=b, 3=h, 4=y)
+- Key_Response_Nb: The correct response for the task in terms of number (localization: 1=g, 2=b, 3=h, 4=y; categorization: 1=b, 2=n)
 
 - Response_Status: Participant Response status : 1=Correct answer, 2=Wrong answer, 3=No response (>1500ms)
 
@@ -157,7 +155,7 @@ In these three blocks of trials, the distribution of trials is as follows:
   
 - Taskname: The name of the task completed by the participant for this specific trial
 
-- Order: The order of task completion. In this specific experiment all participants are exposed to the "Threat then Toon" Blockorder. 1 = ControlRed then ThreatRed then ToonRed Blocks ; 2 = ControlGreen then ThreatGreen then ToonGreen Blocks
+- Order: The order of task completion.
 
 - Blockorder: The order of task completion:
   - "1" ~ "Red_Ctrl_Threat_Toon"
@@ -210,7 +208,7 @@ In these three blocks of trials, the distribution of trials is as follows:
 
 - Emotion_Rating: Participant rating on each anxiety scale item
 
-- Emotion_Type: the emotion  participant have to rate using the same name as in experiment programing ("ColÃ¨re", "Calme", "Angoisse", "Nervosite", "Joie", "Tension", "Stress", "Deprime", NA )
+- Emotion_Type: the emotion  participant have to rate using the same name as in experiment programing ("Colere", "Calme", "Angoisse", "Nervosite", "Joie", "Tension", "Stress", "Deprime", NA )
 
 - Emotion: the emotion  participant have to rate after renaming emotions ("Angry", "Calm", "Anxious", "Nervous", "Happy", "Tense", "Stressed", "Depressed", NA)
 
@@ -218,8 +216,24 @@ In these three blocks of trials, the distribution of trials is as follows:
 
 - Counting_Sounds: A count of each trial number between two sound happenings (only for the task trials). The count is restart to 1 after a sound happens.
 
+Fear_Score_Pretest: A factorial composite score of 4 anxiety items (Tense,
+Anxious, Nervous, Stressed) measured at the beginning of the experiment, using a Bartlett method
 
-`warning("I may have forgotten some variables I built in this codebook. I have to ckeck the final data frame to see if there is no missing variable !!!")`
+Fear_Score: A factorial composite score of 4 anxiety items (Tense,
+Anxious, Nervous, Stressed) measured after the experimental block, using a Bartlett method
+
+Evol_Anxiety_Bart: The difference between the anxiety factorial score after the experimental block and at the beginning of the experiment. Higher scores reflect an increasing of the anxiety feelings at the post-measurement in comparison to the pre-measurement (Fear_Score - Fear_Score_Pretest)
+
+Fear_Mean_Pretest: A composite score of 4 anxiety items (Tense, Anxious, Tense,
+Stressed) measured at the beginning of the experiment, using a mean calculation rather than a factorial score
+
+Fear_Mean: A composite score of 4 anxiety items (Tense, Anxious, Tense,
+Stressed) after the experimental block, using a mean calculation rather than a factorial score
+
+Evol_Anxiety_Mean: The difference between the anxiety mean score after the experimental block and at the beginning of the experiment. Higher scores reflect an increasing of the anxiety feelings at the post-measurement in comparison to the pre-measurement (Fear_Mean - Fear_Mean_Pretest)
+
+
+
 
 ```{r Renaming variables}
 tmp <- df # Create a temporary file based on df
@@ -711,16 +725,101 @@ Survey CodeBook
 
 
 - Task_Type: Which spatial cueing task participants have to perform:
-    - 1 = SpatialCueing_Controllability : In the threat and the Toon Blocks, participants think that sound happening is linked to their performance and that they can decrease the number of screams or vocalise improving their performance. 
-    - 2 = = SpatialCueing_Random : In the threat and the Toon Blocks, participants think that sounds happens randomly and are not linked to their personal performance.
+    - 1 = SpatialCueing_Localization : Participants receive a simple search instruction to complete the spatial cueing task (they have only to locate the target) 
+    - 2 = SpatialCueing_Categorization : Participants receive a coumpund search instruction to complete the spatial cueing task (they have to locate AND categorize the target).
     
+    
+    
+- Check_Sound: Did participants hear any sound during the experiment 
+  - 1 = Participants did not hear any sound\
+  - 2 = Participant heard some sounds
 
-`warning("I may have forgotten some variables I built in this codebook. I have to ckeck the final data frame to see if there is no missing variable !!!")`
+Check_Uncomfort: Did participants hear these sound at an uncomfortable level
+  - 1 = Sound level was not uncomfortable\
+  - 2 = Sound level was uncomfortable
+
+Check_Volume: Did participants change the volume of their computer after the sound calibration
+  - 1 = Participants changed their sound level\
+  - 2 = Participants do not change their sound level
+  
+  Threat_Check_1: Participant rating on the threat perceived by the Screams during the experiment(i.e., "The Screams I heard during the experiment were threatening"). Responses on a 10-likert scale
+- 1 = "Not at all" 
+- 10 = "Extremely"
+
+Threat_Check_2: Participant rating on the threat perceived by the Screams during the experiment(i.e., "I felt stressed by the possibility of hearing Screams during the task"). Responses on a 10-likert scale
+- 1 = "Not at all" 
+- 10 = "Extremely"
+
+Threat_Check_3: Participant rating on the threat perceived by the Vocalizations during the experiment(i.e., "The Vocalizations I heard during the experiment were threatening"). Responses on a 10-likert scale
+- 1 = "Not at all" 
+- 10 = "Extremely"
+
+Threat_Check_4: Participant rating on the threat perceived by the Vocalizations during the experiment(i.e., "I felt stressed by the possibility of hearing Vocalizations during the task"). Responses on a 10-likert scale
+- 1 = "Not at all" 
+- 10 = "Extremely"
+
+Subjective_SES: Participant rating on the Mac Arthur scale (Adler, 2000) measuring subjective social status. Response on a 10-Likert scale
+- 1 = "Not at all" 
+- 10 = "Extremely"
+
+Subjective_SES: Participant self placement on the McArthur Subjective SES scale. A 10-point scale
+- 1 = the lowest social class in the society 
+- 10 = the highest social class in the society
+
+Age: Participant self rating on age
+
+Gender: Participant gender self identification\
+- 1 = Woman self identification\
+- 2 = Man self identification\
+- 3 = None of these
+
+Town: The town where participants live in
+
+Country: The country where participant live in
+
+Studies: The highest level of education achieved by the participants
+- 0 = No qualification
+- 1 = Secondary schools certificate
+- 2 = CAP (certificate of professional competence) or BEP (Professional Studies Certificate)
+- 3 = Baccalaureate
+- 4 = BAC+1
+- 5 = BAC+2
+- 6 = BAC+3 
+- 7 = BAC+4
+- 8 = BAC+5
+- 9 = BAC+6
+- 10 = BAC+8
+- 11 = more than BAC+8
+
+CSP: Participant occupation
+- 1 = Farmer, farm operator
+- 2 = Craftsperson, shopkeeper, business owner
+- 3 = Executive and higher intellectual profession
+- 4 = Intermediate profession (e.g. teacher, nurse, social worker, etc.)
+- 5 = salaried employee
+- 6 = Manual worker
+- 7 = Retired
+- 8 = Student or in educational training
+- 9 = Not in employment or military
+- 10 = Don't know or can't answer
+- 11 = Other
+
+CSP_Other: If participant declare another occupation, they can fill in a blank space to specify it.
+    
 
 
 ```{r Open and rename Survey data}
 
-tmp2 <- data <- read_csv("Data/data.csv")
+# tmp2 <- data <- read_csv("Data/data.csv")
+# 
+# df_Anonymous <- tmp2 %>%
+#   mutate(ID_Yapper_1 = "####")
+# 
+# write.csv(df_Anonymous, file = "Data/data_anonymous.csv")
+
+tmp2 <- data <- read_csv("Data/data_anonymous.csv")%>%
+    select(-"...1")
+
 #tmp2$Ppt <- NA
 warning("j'ai pas encore pris le temps de faire le code book pour les variables que je suis en train de créer...!")
 
@@ -939,15 +1038,9 @@ df_Final[Numerical_Varibles] <- lapply(df_Final[Numerical_Varibles], as.numeric)
 
 ```{r Dataframe Saving}
 
-write.csv(df_Final, file = "Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv")
+write.csv(df_Final, file = "Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv")
+write.csv(df_Final, file = "Data/Transformed_Data/Final_df_Threat_SpatialCueing_NotAnonymous.csv")
 
 ```
 
-
-
-#### R tips:
-
-Remove any row with NA’s in specific column
-df %>%
-  filter(!is.na(column_name))
 

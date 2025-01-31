@@ -47,36 +47,13 @@ Contrary to our analysis, we do not use the contrast we plan to analyse simultan
 
 # Option settings and data loading
 
-## Knit options
-
-```{r setup}
-
-knitr::opts_chunk$set(message = FALSE, 
-                      warning = FALSE)
-
-knitr::knit_hooks$set(
-   error = function(x, options) {
-     paste('\n\n<div class="alert alert-danger">',
-           gsub('##', '\n', gsub('^##\ Error', '**Error**', x)),
-           '</div>', sep = '\n')
-   },
-   warning = function(x, options) {
-     paste('\n\n<div class="alert alert-warning">',
-           gsub('##', '\n', gsub('^##\ Warning:', '**Warning**', x)),
-           '</div>', sep = '\n')
-   },
-   message = function(x, options) {
-     paste('\n\n<div class="alert alert-info">',
-           gsub('##', '\n', x),
-           '</div>', sep = '\n')
-   }
-)
-
-```
 
 ## Package loading
 
 ```{r Package loading}
+
+knitr::opts_chunk$set(message = FALSE, 
+                      warning = FALSE)
 
 require(pacman)
 
@@ -90,7 +67,7 @@ p_load(tinytex, knitr, kableExtra, readr, dplyr, tidyverse, psych, Hmisc, mada, 
 
 # Open the dataframe
 
-df_Total <- read_csv("Output/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
+df_Total <- read_csv("Data/Transformed_Data/Final_df_Threat_SpatialCueing.csv") %>%
   select(-"...1")
 
 
@@ -1852,8 +1829,8 @@ residuals, hat values, cook distance)
 Here, we remove trials reflecting outliers in terms of Studentized
 residuals, hat values and cook distance. For that we removed rows with
 : - Studentized residuals \> 3 or Studentized residuals \< -3 - Hat
-values \> .020 (its a relative threshold based on histogram and visual
-inspection of these values) - Cook distance \> .020 (its a relative
+values \> .071 (its a relative threshold based on histogram and visual
+inspection of these values) - Cook distance \> .050 (its a relative
 threshold based on histogram and visual inspection of these values)
 
 ###### RT Prediction
@@ -3030,18 +3007,13 @@ or the reported threatening nature of screams (*b* =
 `r ifelse((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Anxiety_01_cov["Threat_Scream_Tot", "Pr...t.."]), digit = 3))))`).
 
 
+Some of analysis reportings have to be checked because we based these results on categorization results
 
 
 
+## Old analysis
 
-
-
-
-
-
-These analysis are to be checked because we do not have any interaction effect between validity and reported anxiety.
-
-The second effet is more interesting and show that the more participants
+An effet show that the more participants
 feel threatened by screams the faster they respond on the categorisation
 task. Here is a graphic representation of this effect:
 
@@ -3068,7 +3040,7 @@ plot_model(RT_Graph_ThreatScreams, type = "slope", terms = "Threat_Scream_Tot")
 
 ```
 
-An additional analysis, revealed a marginally significant interaction
+An additional analysis, revealed a significant interaction
 between self reported anxiety and the perceived threatening nature of
 screams (*b* =
 `r round(coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Estimate"], digits = 2)`,
@@ -3078,10 +3050,8 @@ screams (*b* =
 *p*
 `r ifelse((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."])<= 0.001 ,"< 0.001", ifelse((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."])<= 0.01 ,"< 0.01", paste0("= ", round((coefs_RT_Int_ThreatScreams_Anxiety["Threat_Scream_Tot:Evol_Anxiety_Mean", "Pr...t.."]), digit = 3))))`).
 It means that for participants that feel less preoccupied by the screams
-and who judge it as not threatening, the effect of self reported anxiety
-on RT is large whereas this effect is not maintained when participants
-report being highly threatened by the screams. Here is a graph of this
-interaction:
+and who judge it as not threatening, higher self-reported anxiety is associated to slower RT whereas for participants that feel highly preoccupied by the screams and who judge it as not threatening, higher self-reported anxiety is associated to faster RT. 
+Here is a graph of this interaction:
 
 ```{r RT graph Screams Anxiety}
 
@@ -3091,7 +3061,7 @@ plot_model(RT_Int_ThreatScreams_Anxiety, type = "int", terms = c("Threat_Scream_
 ```
 
 
-
+## Training effect
 
 ```{r Training effect}
 
@@ -3116,8 +3086,11 @@ plot_model(Lmer_time, type = "slope")
 
 
 
+## Sequential graphic representation of RT by participant
 
-```{r Sequential representaation of RT, eval = FALSE}
+
+
+```{r Sequential representation of RT, eval = FALSE}
 
 Ppt_List <- unique(df_Locate$response_id)
 
@@ -3143,9 +3116,10 @@ a <- ggplot(df_Locate, aes(x=Counting_Trial, y=RT)) +
 ```
 
 
-###
+## Savings
 
-```{r}
+
+```{r Saving models Locate}
 
 RT_ModFinal_ThTo_02_Locate <- RT_ModFinal_ThTo_02
 Accuracy_ModFinal_ThTo_Locate <- Accuracy_ModFinal_ThTo
